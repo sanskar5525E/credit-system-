@@ -184,14 +184,14 @@ def collection_priority(df):
 
 def color_grade(val):
 
-    if val=="A":
-        return "background-color:#d4edda"
-    elif val=="B":
-        return "background-color:#fff3cd"
-    elif val=="C":
-        return "background-color:#ffe5b4"
-    elif val=="D":
-        return "background-color:#f8d7da"
+    if val == "A":
+        return "background-color:#1b5e20; color:white"   # dark green
+    elif val == "B":
+        return "background-color:#f9a825; color:black"   # strong yellow
+    elif val == "C":
+        return "background-color:#ef6c00; color:white"   # strong orange
+    elif val == "D":
+        return "background-color:#c62828; color:white"   # strong red
     return ""
 
 
@@ -282,7 +282,9 @@ if uploaded_file is not None:
     for col in ["total_amount","total_paid","total_outstanding"]:
         display_df[col] = display_df[col].apply(format_inr)
 
-    styled = display_df.style.applymap(color_grade,subset=["risk_grade"])
+    styled = display_df.style.applymap(color_grade, subset=["risk_grade"]).set_properties(
+    subset=["risk_grade"], **{"text-align": "center", "font-weight": "bold"}
+)
 
     st.dataframe(styled,use_container_width=True)
 
