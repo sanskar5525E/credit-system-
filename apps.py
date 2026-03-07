@@ -8,8 +8,8 @@ import io
 # ------------------------------
 # Page configuration
 # ------------------------------
-st.set_page_config(page_title="Wholesale Risk Dashboard", layout="wide")
-st.title("📊 Wholesale Customer Risk Dashboard")
+st.set_page_config(page_title="Wholesale Risk Dashboard (₹)", layout="wide")
+st.title("📊 Wholesale Customer Risk Dashboard (₹)")
 st.markdown("Upload your invoices file (CSV or Excel) to analyze outstanding amounts, overdue days, and customer risk grades.")
 
 # ------------------------------
@@ -19,7 +19,7 @@ def clean_data(df):
     """Standardize column names, parse dates, and ensure numeric amounts."""
     df.columns = df.columns.str.strip().str.lower().str.replace(' ', '_')
     
-    # Map expected column names (allowing slight variations)
+    # Map expected column names
     col_map = {
         'customer_name': 'customer_name',
         'invoice_no': 'invoice_no',
@@ -30,10 +30,9 @@ def clean_data(df):
         'payment_date': 'payment_date'
     }
     
-    # Rename if exact match not found, try to find similar
+    # Fuzzy rename if exact match not found
     for std_name in col_map.values():
         if std_name not in df.columns:
-            # try to find column containing the key words
             for col in df.columns:
                 if std_name.replace('_', '') in col.replace('_', ''):
                     df.rename(columns={col: std_name}, inplace=True)
@@ -56,7 +55,7 @@ def clean_data(df):
     df['amount'] = pd.to_numeric(df['amount'], errors='coerce').fillna(0)
     df['paid_amount'] = pd.to_numeric(df['paid_amount'], errors='coerce').fillna(0)
     
-    # Fill missing payment_date with NaT (for unpaid invoices)
+    # Fill missing payment_date with NaT
     if 'payment_date' not in df.columns:
         df['payment_date'] = pd.NaT
     else:
@@ -74,7 +73,7 @@ def calculate_invoice_metrics(df, today):
     """Add outstanding, overdue days, and payment status per invoice."""
     df = df.copy()
     df['outstanding'] = df['amount'] - df['paid_amount']
-    df['outstanding'] = df['outstanding'].clip(lower=0)  # no negative outstanding
+    df['outstanding'] = df['outstanding'].clip(lower=0)
     
     # Overdue days for unpaid invoices
     df['overdue_days'] = 0
@@ -87,6 +86,50 @@ def calculate_invoice_metrics(df, today):
     df.loc[mask_paid, 'paid_late'] = True
     
     return df
+
+def calculate_risk_score(row):
+    """
+    Compute a risk score (0-100) based on:
+    - Max overdue days (0-40 points)
+    - Overdue amount ratio (0-50 points)
+    - Late payment ratio (0-10 points)
+    """
+    score = 0
+    
+    # Overdue days factor
+    max_days = row['max_overdue_days']
+    if max_days > 0:
+        if max_days <= 30:
+            score += 10
+        elif max_days <= 60:
+            score += 20
+        elif max_days <= 90:
+            score += 30
+        else:
+            score += 40
+    
+    # Overdue amount ratio (outstanding / total amount)
+    if row['total_amount'] > 0:
+        overdue_ratio = row['total_outstanding'] / row['total_amount']
+        score += overdue_ratio * 50  # max 50 points
+    
+    # Late payment ratio (late_paid / total_paid_invoices)
+    if row['total_paid_invoices'] > 0:
+        late_ratio = row['late_paid_count'] / row['total_paid_invoices']
+        score += late_ratio * 10  # max 10 points
+    
+    return min(round(score), 100)  # cap at 100
+
+def assign_risk_grade(score):
+    """Map score to A-D grades."""
+    if score <= 10:
+        return 'A'
+    elif score <= 30:
+        return 'B'
+    elif score <= 60:
+        return 'C'
+    else:
+        return 'D'
 
 def aggregate_customer(df, today):
     """Compute per‑customer metrics and assign risk grade."""
@@ -105,15 +148,16 @@ def aggregate_customer(df, today):
         late_paid_count = group['paid_late'].sum()
         total_paid_invoices = group[group['paid_amount'] >= group['amount']].shape[0]
         
-        # Risk grade logic
-        if max_overdue_days == 0 and late_paid_count == 0:
-            grade = 'A'
-        elif max_overdue_days == 0 and late_paid_count > 0:
-            grade = 'B'
-        elif max_overdue_days <= 30:
-            grade = 'C'
-        else:
-            grade = 'D'
+        # Risk score
+        row = {
+            'max_overdue_days': max_overdue_days,
+            'total_outstanding': total_outstanding,
+            'total_amount': total_amount,
+            'late_paid_count': late_paid_count,
+            'total_paid_invoices': total_paid_invoices
+        }
+        risk_score = calculate_risk_score(row)
+        grade = assign_risk_grade(risk_score)
         
         customers.append({
             'customer_name': name,
@@ -125,6 +169,7 @@ def aggregate_customer(df, today):
             'total_overdue_amount': total_overdue_amount,
             'late_paid_count': late_paid_count,
             'total_paid_invoices': total_paid_invoices,
+            'risk_score': risk_score,
             'risk_grade': grade
         })
     
@@ -132,9 +177,9 @@ def aggregate_customer(df, today):
     # Add recommendation based on grade
     rec_map = {
         'A': '✅ Customer pays on time. Safe to continue normal credit.',
-        'B': '✅ Customer pays on time (some past lateness). Safe to continue normal credit.',
-        'C': '⚠️ Reduce credit exposure. Follow up regularly. Ask for partial advance on next order.',
-        'D': '🔴 Stop giving new credit. Collect pending amount urgently. Allow only cash transactions.'
+        'B': '⚠️ Moderate risk. Monitor occasionally; consider slight credit limit.',
+        'C': '🔶 High risk. Reduce credit exposure, follow up regularly, ask for advances.',
+        'D': '🔴 Very high risk. Stop new credit, collect urgently, cash only.'
     }
     customer_df['recommendation'] = customer_df['risk_grade'].map(rec_map)
     return customer_df
@@ -183,7 +228,7 @@ if uploaded_file is not None:
     with st.expander("Show cleaned data preview"):
         st.dataframe(df_inv.head(10))
     
-    # Key metrics
+    # Key metrics (in ₹)
     st.header("📈 Key Metrics")
     col1, col2, col3, col4 = st.columns(4)
     total_outstanding = customer_summary['total_outstanding'].sum()
@@ -191,22 +236,22 @@ if uploaded_file is not None:
     total_amount = customer_summary['total_amount'].sum()
     num_customers = customer_summary.shape[0]
     
-    col1.metric("Total Outstanding", f"${total_outstanding:,.2f}")
-    col2.metric("Total Paid", f"${total_paid:,.2f}")
-    col3.metric("Total Invoiced", f"${total_amount:,.2f}")
+    col1.metric("Total Outstanding", f"₹{total_outstanding:,.2f}")
+    col2.metric("Total Paid", f"₹{total_paid:,.2f}")
+    col3.metric("Total Invoiced", f"₹{total_amount:,.2f}")
     col4.metric("Number of Customers", num_customers)
     
     # Customer table with risk grades
     st.header("👥 Customer Risk Summary")
     display_cols = ['customer_name', 'total_invoices', 'total_amount', 'total_paid', 
-                    'total_outstanding', 'max_overdue_days', 'risk_grade', 'recommendation']
+                    'total_outstanding', 'max_overdue_days', 'risk_score', 'risk_grade', 'recommendation']
     display_df = customer_summary[display_cols].copy()
     
-    # Format currency
+    # Format currency in ₹
     for col in ['total_amount', 'total_paid', 'total_outstanding']:
-        display_df[col] = display_df[col].apply(lambda x: f"${x:,.2f}")
+        display_df[col] = display_df[col].apply(lambda x: f"₹{x:,.2f}")
     
-    # Apply color to risk grade column using pandas styler
+    # Apply color to risk grade column
     styled = display_df.style.applymap(color_grade, subset=['risk_grade'])
     st.dataframe(styled, use_container_width=True)
     
@@ -240,10 +285,8 @@ if uploaded_file is not None:
     )
     
 else:
-    # Show sample data option for demo
     st.info("👆 Please upload a file to begin.")
     if st.button("Use sample data"):
-        # Create a small sample dataset
         sample_data = pd.DataFrame({
             'Customer_name': ['Alpha Ltd', 'Alpha Ltd', 'Beta Inc', 'Beta Inc', 'Gamma LLC', 'Delta Corp'],
             'Invoice_No': ['INV001', 'INV002', 'INV003', 'INV004', 'INV005', 'INV006'],
@@ -253,15 +296,11 @@ else:
             'paid_Amount': [5000, 3000, 0, 2000, 1000, 0],
             'Payment_date': ['2025-02-05', '2025-02-20', None, '2025-03-01', '2025-03-15', None]
         })
-        # Save to BytesIO and simulate upload
         sample_bytes = io.BytesIO()
         sample_data.to_csv(sample_bytes, index=False)
         sample_bytes.seek(0)
-        uploaded_file = sample_bytes
-        # Rerun? Not possible directly; we'll reassign uploaded_file and rely on the above block.
-        # But we need to trick Streamlit: we'll set a session state.
         st.session_state['sample_uploaded'] = sample_bytes
-        
+        st.rerun()
+
 if 'sample_uploaded' in st.session_state:
     uploaded_file = st.session_state['sample_uploaded']
-    # Rerun the processing (the code above will handle it if uploaded_file is not None)
