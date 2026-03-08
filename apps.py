@@ -386,11 +386,13 @@ else:
         })
 
         sample_bytes = io.BytesIO()
+        st.session_state["use_sample"] = False
 
         sample_data.to_csv(sample_bytes,index=False)
 
         sample_bytes.seek(0)
 
         st.session_state["sample_uploaded"] = sample_bytes
+        st.session_state["use_sample"] = True
 
         st.rerun()
