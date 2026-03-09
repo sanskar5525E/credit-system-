@@ -299,3 +299,5 @@ if df_raw is not None:
         file_name=f"risk_report_{datetime.now().strftime('%Y%m%d')}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
+These changes ensure the dashboard displays the summary KPIs at the top and uses clear, plain language throughout.
