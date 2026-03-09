@@ -10,7 +10,7 @@ st.set_page_config(page_title="Wholesale Credit Risk Dashboard", layout="wide")
 st.title("📊 Wholesale Customer Risk Dashboard")
 
 def format_inr(x):
-    return f"₹{x:,.2f}"
+return f"₹{x:,.2f}"
 
 def clean_data(df):
 
@@ -31,7 +31,7 @@ for col in required:
         st.error(f"Missing column: {col}")
         st.stop()
 
-date_cols = ["invoice_date","due_date","payment_date"]
+date_cols = ["invoice_date", "due_date", "payment_date"]
 
 for col in date_cols:
     if col in df.columns:
@@ -48,7 +48,7 @@ df = df[df["amount"] > 0]
 return df
 ```
 
-def calculate_invoice_metrics(df,today):
+def calculate_invoice_metrics(df, today):
 
 ```
 df = df.copy()
@@ -60,10 +60,9 @@ df["overdue_days"] = 0
 
 mask_unpaid = (df["outstanding"] > 0) & (df["due_date"] < today)
 
-df.loc[mask_unpaid,"overdue_days"] = (
-    today - df.loc[mask_unpaid,"due_date"]
+df.loc[mask_unpaid, "overdue_days"] = (
+    today - df.loc[mask_unpaid, "due_date"]
 ).dt.days
-
 
 mask_paid_late = (
     (df["paid_amount"] >= df["amount"]) &
@@ -71,14 +70,13 @@ mask_paid_late = (
     (df["payment_date"] > df["due_date"])
 )
 
-df.loc[mask_paid_late,"overdue_days"] = (
-    df.loc[mask_paid_late,"payment_date"]
-    - df.loc[mask_paid_late,"due_date"]
+df.loc[mask_paid_late, "overdue_days"] = (
+    df.loc[mask_paid_late, "payment_date"] -
+    df.loc[mask_paid_late, "due_date"]
 ).dt.days
 
-
 df["paid_late"] = False
-df.loc[mask_paid_late,"paid_late"] = True
+df.loc[mask_paid_late, "paid_late"] = True
 
 return df
 ```
@@ -113,7 +111,7 @@ if row["total_paid_invoices"] > 0:
 
     score += late_ratio * 10
 
-return min(round(score),100)
+return min(round(score), 100)
 ```
 
 def assign_risk_grade(score):
@@ -129,12 +127,12 @@ else:
     return "D"
 ```
 
-def aggregate_customer(df,today):
+def aggregate_customer(df, today):
 
 ```
 customers = []
 
-for name,group in df.groupby("customer_name"):
+for name, group in df.groupby("customer_name"):
 
     total_amount = group["amount"].sum()
     total_paid = group["paid_amount"].sum()
@@ -154,13 +152,11 @@ for name,group in df.groupby("customer_name"):
         avg_delay = 0
 
     row = {
-
-        "max_overdue_days":max_overdue_days,
-        "total_outstanding":total_outstanding,
-        "total_amount":total_amount,
-        "late_paid_count":late_paid_count,
-        "total_paid_invoices":total_paid_invoices
-
+        "max_overdue_days": max_overdue_days,
+        "total_outstanding": total_outstanding,
+        "total_amount": total_amount,
+        "late_paid_count": late_paid_count,
+        "total_paid_invoices": total_paid_invoices
     }
 
     risk_score = calculate_risk_score(row)
@@ -184,30 +180,26 @@ for name,group in df.groupby("customer_name"):
         dispatch = "✅ Allowed"
 
     customers.append({
-
-        "customer_name":name,
-        "total_invoices":group.shape[0],
-        "total_amount":total_amount,
-        "total_paid":total_paid,
-        "total_outstanding":total_outstanding,
-        "max_overdue_days":max_overdue_days,
-        "avg_payment_delay":round(avg_delay,1),
-        "risk_score":risk_score,
-        "risk_grade":grade,
-        "suggested_credit_limit":credit_limit,
-        "sales_status":dispatch
-
+        "customer_name": name,
+        "total_invoices": group.shape[0],
+        "total_amount": total_amount,
+        "total_paid": total_paid,
+        "total_outstanding": total_outstanding,
+        "max_overdue_days": max_overdue_days,
+        "avg_payment_delay": round(avg_delay, 1),
+        "risk_score": risk_score,
+        "risk_grade": grade,
+        "suggested_credit_limit": credit_limit,
+        "sales_status": dispatch
     })
 
 customer_df = pd.DataFrame(customers)
 
 rec_map = {
-
-    "A":"✅ Safe customer",
-    "B":"⚠️ Monitor occasionally",
-    "C":"🟠 Reduce credit",
-    "D":"🔴 Collect urgently"
-
+    "A": "✅ Safe customer",
+    "B": "⚠️ Monitor occasionally",
+    "C": "🟠 Reduce credit",
+    "D": "🔴 Collect urgently"
 }
 
 customer_df["recommendation"] = customer_df["risk_grade"].map(rec_map)
@@ -220,13 +212,10 @@ def color_grade(val):
 ```
 if val == "A":
     return "background-color:#1b5e20; color:white"
-
 elif val == "B":
     return "background-color:#f9a825; color:black"
-
 elif val == "C":
     return "background-color:#ef6c00; color:white"
-
 elif val == "D":
     return "background-color:#c62828; color:white"
 
@@ -247,7 +236,7 @@ df["priority_score"] = (
 return df.sort_values("priority_score", ascending=False)
 ```
 
-uploaded_file = st.file_uploader("Upload CSV or Excel", type=["csv","xlsx"])
+uploaded_file = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
 
 if uploaded_file is not None:
 
@@ -268,9 +257,9 @@ today = pd.Timestamp.now().normalize()
 
 df_clean = clean_data(df_raw)
 
-df_inv = calculate_invoice_metrics(df_clean,today)
+df_inv = calculate_invoice_metrics(df_clean, today)
 
-customer_summary = aggregate_customer(df_inv,today)
+customer_summary = aggregate_customer(df_inv, today)
 
 st.success("Data processed successfully")
 
@@ -278,43 +267,39 @@ st.header("👥 Customer Risk Summary")
 
 display_df = customer_summary.copy()
 
-for col in ["total_amount","total_paid","total_outstanding","suggested_credit_limit"]:
+for col in ["total_amount", "total_paid", "total_outstanding", "suggested_credit_limit"]:
     display_df[col] = display_df[col].apply(format_inr)
 
-styled = display_df.style.applymap(color_grade,subset=["risk_grade"])
+styled = display_df.style.applymap(color_grade, subset=["risk_grade"])
 
-st.dataframe(styled,use_container_width=True)
-
+st.dataframe(styled, use_container_width=True)
 
 st.header("📊 Risk Distribution")
 
-grade_counts = customer_summary["risk_grade"].value_counts().reindex(["A","B","C","D"],fill_value=0)
+grade_counts = customer_summary["risk_grade"].value_counts().reindex(["A", "B", "C", "D"], fill_value=0)
 
 fig = px.bar(
     x=grade_counts.index,
     y=grade_counts.values,
     color=grade_counts.index,
-    color_discrete_map={"A":"green","B":"gold","C":"orange","D":"red"}
+    color_discrete_map={"A": "green", "B": "gold", "C": "orange", "D": "red"}
 )
 
-st.plotly_chart(fig,use_container_width=True)
-
+st.plotly_chart(fig, use_container_width=True)
 
 st.header("📞 Customers To Collect")
 
 priority_df = collection_priority(customer_summary)
 
-st.dataframe(priority_df.head(10),use_container_width=True)
-
+st.dataframe(priority_df.head(10), use_container_width=True)
 
 st.header("📥 Download Report")
 
 output = io.BytesIO()
 
-with pd.ExcelWriter(output,engine="openpyxl") as writer:
-
-    customer_summary.to_excel(writer,sheet_name="Customer Summary",index=False)
-    df_inv.to_excel(writer,sheet_name="Invoice Details",index=False)
+with pd.ExcelWriter(output, engine="openpyxl") as writer:
+    customer_summary.to_excel(writer, sheet_name="Customer Summary", index=False)
+    df_inv.to_excel(writer, sheet_name="Invoice Details", index=False)
 
 st.download_button(
     "Download Excel",
@@ -322,4 +307,3 @@ st.download_button(
     file_name=f"risk_report_{datetime.now().strftime('%Y%m%d')}.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 )
-```
