@@ -147,18 +147,18 @@ def aggregate_customer(df, today):
         })
     customer_df = pd.DataFrame(customers)
 
-    # --- NEW: Map risk grade to Status and elaborate Action ---
+    # --- Status with emojis, Action with emojis ---
     status_map = {
-        "A": "Low Risk",
-        "B": "Medium Risk",
-        "C": "High Risk",
-        "D": "Critical"
+        "A": "🟢 Low Risk",
+        "B": "🟡 Medium Risk",
+        "C": "🟠 High Risk",
+        "D": "🔴 Critical"
     }
     action_map = {
-        "A": "Extend credit limit",
-        "B": "Monitor payments closely",
-        "C": "Reduce exposure",
-        "D": "Immediate collection"
+        "A": "✅ Extend credit limit",
+        "B": "👀 Monitor payments closely",
+        "C": "⚠️ Reduce exposure",
+        "D": "🚨 Immediate collection"
     }
     customer_df["status"] = customer_df["risk_grade"].map(status_map)
     customer_df["recommendation"] = customer_df["risk_grade"].map(action_map)
@@ -216,7 +216,7 @@ if df_raw is not None:
 
     st.success("Data processed successfully")
 
-    # --- DARK THEME FINANCIAL SUMMARY ---
+    # --- TRANSPARENT FINANCIAL SUMMARY CARDS (glass effect) ---
     total_customers = customer_summary.shape[0]
     total_credits = df_inv["amount"].sum()
     total_paid = customer_summary["total_paid"].sum()
@@ -227,40 +227,43 @@ if df_raw is not None:
     st.markdown("""
     <style>
         .metric-card {
-            background: #1e1e1e;        /* dark background */
-            border-radius: 12px;
+            background: rgba(20, 20, 30, 0.7);  /* semi-transparent dark */
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border-radius: 16px;
             padding: 20px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-            border: 1px solid #333;
-            transition: transform 0.2s;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.2);
+            border: 1px solid rgba(255,255,255,0.1);
+            transition: transform 0.2s, box-shadow 0.2s;
         }
         .metric-card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 6px 16px rgba(0,0,0,0.5);
+            transform: translateY(-4px);
+            box-shadow: 0 12px 24px rgba(0,0,0,0.3);
+            background: rgba(30, 30, 40, 0.8);
         }
         .metric-label {
             font-size: 0.9rem;
-            color: #b0b0b0;              /* light grey */
+            color: #ccc;
             margin-bottom: 8px;
             letter-spacing: 0.5px;
         }
         .metric-value {
             font-size: 2rem;
             font-weight: 600;
-            color: #ffffff;               /* white text */
+            color: white;
             line-height: 1.2;
         }
         .metric-icon {
             font-size: 1.8rem;
             margin-right: 10px;
             vertical-align: middle;
-            color: #ffffff;
+            color: white;
         }
         .sub-metric {
             margin-top: 10px;
             font-size: 0.85rem;
-            color: #a0a0a0;
-            border-top: 1px dashed #444;
+            color: #aaa;
+            border-top: 1px dashed rgba(255,255,255,0.2);
             padding-top: 8px;
         }
     </style>
@@ -317,9 +320,9 @@ if df_raw is not None:
             <div class="sub-metric">Grades C & D</div>
         </div>
         """, unsafe_allow_html=True)
-    # --- END DARK SUMMARY ---
+    # --- END TRANSPARENT SUMMARY ---
 
-    # Customer Risk Summary table with Status and elaborate Action
+    # Customer Risk Summary table with Status (emoji) and Action (emoji)
     st.header("👥 Customer Risk Summary")
     display_df = customer_summary.copy()
     display_df.rename(columns={
@@ -336,7 +339,7 @@ if df_raw is not None:
         "status": "Status",
         "recommendation": "Suggested Action"
     }, inplace=True)
-    # Reorder columns to place Status and Suggested Action near Risk
+    # Reorder columns
     cols = ["Customer", "Invoices", "Total Amount", "Paid", "Due", "Overdue Days", "Avg Delay", "Risk Score", "Risk", "Status", "Suggested Action", "Credit Limit"]
     display_df = display_df[cols]
     for col in ["Total Amount", "Paid", "Due", "Credit Limit"]:
