@@ -1,7 +1,8 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from datetime import datetime
+import random
+from datetime import datetime, timedelta
 import plotly.express as px
 import io
 
@@ -11,6 +12,38 @@ st.title("📊 Wholesale Customer Risk Dashboard")
 
 def format_inr(x):
     return f"₹{x:,.2f}"
+
+def generate_example_data():
+    """Create a sample dataset with invoices for a few customers."""
+    np.random.seed(42)
+    random.seed(42)
+    customers = ['ABC Corp', 'XYZ Ltd', 'Mega Distributors', 'Beta Stores', 'Gamma Inc', 'Delta Traders']
+    data = []
+    today = pd.Timestamp.now().normalize()
+    for cust in customers:
+        n_invoices = np.random.randint(3, 10)
+        for i in range(n_invoices):
+            invoice_date = today - pd.Timedelta(days=np.random.randint(1, 180))
+            due_date = invoice_date + pd.Timedelta(days=30)
+            amount = np.random.randint(1000, 50000)
+            # decide if paid
+            if np.random.rand() > 0.3:
+                paid_amount = amount
+                # payment may be late or on time
+                payment_date = due_date + pd.Timedelta(days=np.random.randint(-5, 60))
+            else:
+                paid_amount = amount * np.random.uniform(0, 0.9)  # partial payment
+                payment_date = pd.NaT
+            data.append({
+                'customer_name': cust,
+                'invoice_no': f'INV-{cust[:3]}-{i:03d}',
+                'invoice_date': invoice_date,
+                'due_date': due_date,
+                'amount': amount,
+                'paid_amount': paid_amount,
+                'payment_date': payment_date if not pd.isna(payment_date) else None
+            })
+    return pd.DataFrame(data)
 
 def clean_data(df):
     df.columns = df.columns.str.strip().str.lower().str.replace(" ", "_")
@@ -192,17 +225,42 @@ def collection_priority(df):
     )
     return df.sort_values("priority_score", ascending=False)
 
-# Main app
-uploaded_file = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
+# -------------------------------------------------------------------
+# Main app with button for example data
+# -------------------------------------------------------------------
 
+# Initialize session state
+if 'use_example' not in st.session_state:
+    st.session_state['use_example'] = False
+
+# Layout: file uploader and button side by side
+col1, col2 = st.columns([3, 1])
+with col1:
+    uploaded_file = st.file_uploader("Upload your own CSV or Excel", type=["csv", "xlsx"])
+with col2:
+    st.write("")  # just for vertical alignment
+    st.write("")  # add a little space
+    if st.button("📁 Load Example Data"):
+        st.session_state['use_example'] = True
+        # if an uploaded file was present, it will be ignored after this click
+        st.rerun()  # immediately refresh to show example data
+
+# Determine which data to use
 if uploaded_file is not None:
+    # If a file is uploaded, always use it (and turn off example flag)
+    st.session_state['use_example'] = False
     if uploaded_file.name.endswith(".csv"):
         df_raw = pd.read_csv(uploaded_file)
     else:
         df_raw = pd.read_excel(uploaded_file)
+elif st.session_state['use_example']:
+    # No file uploaded, but example flag is True → generate example data
+    df_raw = generate_example_data()
+    st.info("📌 Showing example data. Upload a file to use your own.")
 else:
     df_raw = None
 
+# Process and display data if we have any
 if df_raw is not None:
     today = pd.Timestamp.now().normalize()
 
@@ -217,7 +275,6 @@ if df_raw is not None:
     for col in ["total_amount", "total_paid", "total_outstanding", "suggested_credit_limit"]:
         display_df[col] = display_df[col].apply(format_inr)
 
-    # Use map instead of applymap for pandas >=2.0
     styled = display_df.style.map(color_grade, subset=["risk_grade"])
     st.dataframe(styled, use_container_width=True)
 
