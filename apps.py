@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -147,13 +146,22 @@ def aggregate_customer(df, today):
             "suggested_credit_limit": credit_limit
         })
     customer_df = pd.DataFrame(customers)
-    rec_map = {
-        "A": "Safe",
-        "B": "Monitor",
-        "C": "Reduce credit",
-        "D": "Collect payment"
+
+    # --- NEW: Map risk grade to Status and elaborate Action ---
+    status_map = {
+        "A": "Low Risk",
+        "B": "Medium Risk",
+        "C": "High Risk",
+        "D": "Critical"
     }
-    customer_df["recommendation"] = customer_df["risk_grade"].map(rec_map)
+    action_map = {
+        "A": "Extend credit limit",
+        "B": "Monitor payments closely",
+        "C": "Reduce exposure",
+        "D": "Immediate collection"
+    }
+    customer_df["status"] = customer_df["risk_grade"].map(status_map)
+    customer_df["recommendation"] = customer_df["risk_grade"].map(action_map)
     return customer_df
 
 def color_grade(val):
@@ -208,7 +216,7 @@ if df_raw is not None:
 
     st.success("Data processed successfully")
 
-    # --- MODERN FINANCIAL SUMMARY ---
+    # --- DARK THEME FINANCIAL SUMMARY ---
     total_customers = customer_summary.shape[0]
     total_credits = df_inv["amount"].sum()
     total_paid = customer_summary["total_paid"].sum()
@@ -219,39 +227,40 @@ if df_raw is not None:
     st.markdown("""
     <style>
         .metric-card {
-            background: white;
+            background: #1e1e1e;        /* dark background */
             border-radius: 12px;
             padding: 20px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.05);
-            border: 1px solid #eaeaea;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            border: 1px solid #333;
             transition: transform 0.2s;
         }
         .metric-card:hover {
             transform: translateY(-2px);
-            box-shadow: 0 6px 16px rgba(0,0,0,0.1);
+            box-shadow: 0 6px 16px rgba(0,0,0,0.5);
         }
         .metric-label {
             font-size: 0.9rem;
-            color: #5f6b7a;
+            color: #b0b0b0;              /* light grey */
             margin-bottom: 8px;
             letter-spacing: 0.5px;
         }
         .metric-value {
             font-size: 2rem;
             font-weight: 600;
-            color: #1e293b;
+            color: #ffffff;               /* white text */
             line-height: 1.2;
         }
         .metric-icon {
             font-size: 1.8rem;
             margin-right: 10px;
             vertical-align: middle;
+            color: #ffffff;
         }
         .sub-metric {
             margin-top: 10px;
             font-size: 0.85rem;
-            color: #64748b;
-            border-top: 1px dashed #e2e8f0;
+            color: #a0a0a0;
+            border-top: 1px dashed #444;
             padding-top: 8px;
         }
     </style>
@@ -308,9 +317,9 @@ if df_raw is not None:
             <div class="sub-metric">Grades C & D</div>
         </div>
         """, unsafe_allow_html=True)
-    # --- END MODERN SUMMARY ---
+    # --- END DARK SUMMARY ---
 
-    # Customer Risk Summary table
+    # Customer Risk Summary table with Status and elaborate Action
     st.header("👥 Customer Risk Summary")
     display_df = customer_summary.copy()
     display_df.rename(columns={
@@ -324,8 +333,12 @@ if df_raw is not None:
         "risk_score": "Risk Score",
         "risk_grade": "Risk",
         "suggested_credit_limit": "Credit Limit",
-        "recommendation": "Action"
+        "status": "Status",
+        "recommendation": "Suggested Action"
     }, inplace=True)
+    # Reorder columns to place Status and Suggested Action near Risk
+    cols = ["Customer", "Invoices", "Total Amount", "Paid", "Due", "Overdue Days", "Avg Delay", "Risk Score", "Risk", "Status", "Suggested Action", "Credit Limit"]
+    display_df = display_df[cols]
     for col in ["Total Amount", "Paid", "Due", "Credit Limit"]:
         display_df[col] = display_df[col].apply(format_inr)
     styled = display_df.style.applymap(color_grade, subset=["Risk"])
@@ -347,13 +360,14 @@ if df_raw is not None:
     st.header("🚩 Top Risky Customers")
     risky_df = customer_summary[customer_summary["risk_grade"].isin(["C","D"])].copy()
     if not risky_df.empty:
-        risky_display = risky_df[["customer_name", "total_outstanding", "max_overdue_days", "risk_grade", "recommendation"]].copy()
+        risky_display = risky_df[["customer_name", "total_outstanding", "max_overdue_days", "risk_grade", "status", "recommendation"]].copy()
         risky_display.rename(columns={
             "customer_name": "Customer",
             "total_outstanding": "Due",
             "max_overdue_days": "Overdue Days",
             "risk_grade": "Risk",
-            "recommendation": "Action"
+            "status": "Status",
+            "recommendation": "Suggested Action"
         }, inplace=True)
         risky_display["Due"] = risky_display["Due"].apply(format_inr)
         styled_risky = risky_display.style.applymap(color_grade, subset=["Risk"])
@@ -364,13 +378,14 @@ if df_raw is not None:
     # Customers to Call
     st.header("📞 Customers to Call")
     priority_df = collection_priority(customer_summary)
-    priority_display = priority_df[["customer_name", "total_outstanding", "max_overdue_days", "risk_grade", "recommendation"]].head(10).copy()
+    priority_display = priority_df[["customer_name", "total_outstanding", "max_overdue_days", "risk_grade", "status", "recommendation"]].head(10).copy()
     priority_display.rename(columns={
         "customer_name": "Customer",
         "total_outstanding": "Due",
         "max_overdue_days": "Overdue Days",
         "risk_grade": "Risk",
-        "recommendation": "Action"
+        "status": "Status",
+        "recommendation": "Suggested Action"
     }, inplace=True)
     priority_display["Due"] = priority_display["Due"].apply(format_inr)
     styled_priority = priority_display.style.applymap(color_grade, subset=["Risk"])
