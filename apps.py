@@ -146,7 +146,6 @@ def aggregate_customer(df, today):
             "suggested_credit_limit": credit_limit
         })
     customer_df = pd.DataFrame(customers)
-    # Simplified recommendations (no emojis)
     rec_map = {
         "A": "Safe",
         "B": "Monitor",
@@ -208,19 +207,109 @@ if df_raw is not None:
 
     st.success("Data processed successfully")
 
-    # Key Metrics summary (placed above the risk table)
-    st.header("📊 Key Metrics")
+    # --- MODERN FINANCIAL SUMMARY ---
     total_customers = customer_summary.shape[0]
-    total_due = customer_summary["total_outstanding"].sum()
+    total_credits = df_inv["amount"].sum()
+    total_paid = customer_summary["total_paid"].sum()
+    total_outstanding = customer_summary["total_outstanding"].sum()
     overdue_amt = df_inv[df_inv["overdue_days"] > 0]["outstanding"].sum()
     high_risk = customer_summary[customer_summary["risk_grade"].isin(["C","D"])].shape[0]
-    cols = st.columns(4)
-    cols[0].metric("Customers", total_customers)
-    cols[1].metric("Total Due", format_inr(total_due))
-    cols[2].metric("Overdue", format_inr(overdue_amt))
-    cols[3].metric("High Risk", high_risk)
 
-    # Customer Risk Summary table with simpler labels
+    st.markdown("""
+    <style>
+        .metric-card {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+            border: 1px solid #eaeaea;
+            transition: transform 0.2s;
+        }
+        .metric-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 16px rgba(0,0,0,0.1);
+        }
+        .metric-label {
+            font-size: 0.9rem;
+            color: #5f6b7a;
+            margin-bottom: 8px;
+            letter-spacing: 0.5px;
+        }
+        .metric-value {
+            font-size: 2rem;
+            font-weight: 600;
+            color: #1e293b;
+            line-height: 1.2;
+        }
+        .metric-icon {
+            font-size: 1.8rem;
+            margin-right: 10px;
+            vertical-align: middle;
+        }
+        .sub-metric {
+            margin-top: 10px;
+            font-size: 0.85rem;
+            color: #64748b;
+            border-top: 1px dashed #e2e8f0;
+            padding-top: 8px;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+
+    st.header("📊 Financial Summary")
+
+    # Row 1: four main metrics
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div><span class="metric-icon">👥</span> <span class="metric-label">Total Customers</span></div>
+            <div class="metric-value">{total_customers}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with col2:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div><span class="metric-icon">💰</span> <span class="metric-label">Total Credits</span></div>
+            <div class="metric-value">{format_inr(total_credits)}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with col3:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div><span class="metric-icon">💳</span> <span class="metric-label">Total Paid</span></div>
+            <div class="metric-value">{format_inr(total_paid)}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with col4:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div><span class="metric-icon">📉</span> <span class="metric-label">Outstanding</span></div>
+            <div class="metric-value">{format_inr(total_outstanding)}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # Row 2: additional metrics (overdue and high risk)
+    col5, col6 = st.columns(2)
+    with col5:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div><span class="metric-icon">⏰</span> <span class="metric-label">Overdue Amount</span></div>
+            <div class="metric-value">{format_inr(overdue_amt)}</div>
+            <div class="sub-metric">Outstanding past due date</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with col6:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div><span class="metric-icon">⚠️</span> <span class="metric-label">High Risk Customers</span></div>
+            <div class="metric-value">{high_risk}</div>
+            <div class="sub-metric">Grades C & D</div>
+        </div>
+        """, unsafe_allow_html=True)
+    # --- END MODERN SUMMARY ---
+
+    # Customer Risk Summary table
     st.header("👥 Customer Risk Summary")
     display_df = customer_summary.copy()
     display_df.rename(columns={
@@ -241,10 +330,9 @@ if df_raw is not None:
     styled = display_df.style.applymap(color_grade, subset=["Risk"])
     st.dataframe(styled, use_container_width=True)
 
-    # Risk Distribution chart (using simple risk labels)
+    # Risk Distribution chart
     st.header("📊 Risk Distribution")
     grade_counts = customer_summary["risk_grade"].value_counts().reindex(["A", "B", "C", "D"], fill_value=0)
-    # Mapping A->Low, B->Medium, C->High, D->Very High
     fig = px.bar(
         x=["Low", "Medium", "High", "Very High"],
         y=grade_counts.values,
@@ -254,7 +342,7 @@ if df_raw is not None:
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    # Top Risky Customers table (risk grade C or D)
+    # Top Risky Customers
     st.header("🚩 Top Risky Customers")
     risky_df = customer_summary[customer_summary["risk_grade"].isin(["C","D"])].copy()
     if not risky_df.empty:
@@ -272,7 +360,7 @@ if df_raw is not None:
     else:
         st.write("No high-risk customers found.")
 
-    # Customers to Call (priority list)
+    # Customers to Call
     st.header("📞 Customers to Call")
     priority_df = collection_priority(customer_summary)
     priority_display = priority_df[["customer_name", "total_outstanding", "max_overdue_days", "risk_grade", "recommendation"]].head(10).copy()
