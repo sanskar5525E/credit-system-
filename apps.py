@@ -10,7 +10,7 @@ st.set_page_config(page_title="Wholesale Credit Risk Dashboard", layout="wide")
 st.title("📊 Wholesale Customer Risk Dashboard")
 
 def format_inr(x):
-return f"₹{x:,.2f}"
+    return f"₹{x:,.2f}"
 
 def clean_data(df):
 
