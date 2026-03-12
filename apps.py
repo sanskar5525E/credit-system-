@@ -63,7 +63,7 @@ OVERDUE_CAP  = 45
 HISTORY_DIR  = "creditpulse_history"
 CLIENTS_FILE = "creditpulse_clients.json"
 # ── Change this to your own secret developer password ──
-DEV_PASSWORD = "creditpulse_dev_2026"
+DEV_PASSWORD = "sanskar45"
 
 os.makedirs(HISTORY_DIR, exist_ok=True)
 
