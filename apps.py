@@ -91,19 +91,19 @@ def calculate_invoice_metrics(df, today):
     # Fully paid but late
     df["fully_paid"] = df["paid_amount"] >= df["amount"]
 
-mask_paid_late = (
-    df["fully_paid"] &
-    (df["payment_date"] > df["due_date"])
-)
+    mask_paid_late = (
+         df["fully_paid"] &
+          (df["payment_date"] > df["due_date"])
+     )
 
-df.loc[mask_paid_late, "overdue_days"] = (
-    df.loc[mask_paid_late, "payment_date"] -
-    df.loc[mask_paid_late, "due_date"]
-).dt.days
+    df.loc[mask_paid_late, "overdue_days"] = (
+        df.loc[mask_paid_late, "payment_date"] -
+        df.loc[mask_paid_late, "due_date"]
+        ).dt.days
 
-df.loc[mask_paid_late, "paid_late"] = True
-    df["overdue_days"] = df["overdue_days"].clip(lower=0)
-    return df
+    df.loc[mask_paid_late, "paid_late"] = True
+        df["overdue_days"] = df["overdue_days"].clip(lower=0)
+ return df
 
 def calculate_risk_score(row):
     """Balanced risk score: 40% overdue, 40% outstanding, 20% payment behaviour."""
