@@ -61,19 +61,45 @@ def clean_data(df):
 
 def calculate_invoice_metrics(df, today):
     df = df.copy()
+
+    # Ensure datetime format
+    df["invoice_date"] = pd.to_datetime(df["invoice_date"], errors="coerce")
+    df["due_date"] = pd.to_datetime(df["due_date"], errors="coerce")
+    df["payment_date"] = pd.to_datetime(df["payment_date"], errors="coerce")
+
+    # Outstanding balance
     df["outstanding"] = df["amount"] - df["paid_amount"]
     df["outstanding"] = df["outstanding"].clip(lower=0)
+
+    # Initialize overdue column
     df["overdue_days"] = 0
+
+    # Case 1: Unpaid or partially paid and overdue
     mask_unpaid = (df["outstanding"] > 0) & (df["due_date"] < today)
-    df.loc[mask_unpaid, "overdue_days"] = (today - df.loc[mask_unpaid, "due_date"]).dt.days
+
+    df.loc[mask_unpaid, "overdue_days"] = (
+        today - df.loc[mask_unpaid, "due_date"]
+    ).dt.days
+
+    # Case 2: Fully paid but paid late
     mask_paid_late = (
         (df["paid_amount"] >= df["amount"]) &
         df["payment_date"].notna() &
         (df["payment_date"] > df["due_date"])
     )
-    df.loc[mask_paid_late, "overdue_days"] = (df.loc[mask_paid_late, "payment_date"] - df.loc[mask_paid_late, "due_date"]).dt.days
+
+    df.loc[mask_paid_late, "overdue_days"] = (
+        df.loc[mask_paid_late, "payment_date"] -
+        df.loc[mask_paid_late, "due_date"]
+    ).dt.days
+
+    # Flag paid late invoices
     df["paid_late"] = False
     df.loc[mask_paid_late, "paid_late"] = True
+
+    # Ensure no negative delays
+    df["overdue_days"] = df["overdue_days"].clip(lower=0)
+
     return df
 
 def calculate_risk_score(row):
