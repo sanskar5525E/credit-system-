@@ -8,14 +8,14 @@ import io
 st.set_page_config(page_title="Wholesale Credit Risk Dashboard", layout="wide")
 
 st.title("📊 Wholesale Credit Risk Dashboard")
-st.caption("Identify risky customers, track overdue payments, and prioritize collections.")
+st.caption("Track risky customers, overdue invoices and prioritize collections.")
 
 # ---------------------------------------------------------
 # Helper
 # ---------------------------------------------------------
 
 def format_inr(x):
-    return f"₹{x:,.0f}"
+    return f"₹{int(x):,}"
 
 # ---------------------------------------------------------
 # Example data
@@ -55,7 +55,7 @@ def generate_example_data():
                 payment_date = due_date + pd.Timedelta(days=np.random.randint(5,40))
 
             elif r < 0.8:
-                paid_amount = amount * np.random.uniform(0.2,0.8)
+                paid_amount = int(amount * np.random.uniform(0.2,0.8))
                 payment_date = due_date + pd.Timedelta(days=np.random.randint(-5,60))
 
             else:
@@ -100,8 +100,8 @@ def clean_data(df):
         if c in df.columns:
             df[c] = pd.to_datetime(df[c],errors="coerce")
 
-    df["amount"] = pd.to_numeric(df["amount"],errors="coerce").fillna(0)
-    df["paid_amount"] = pd.to_numeric(df["paid_amount"],errors="coerce").fillna(0)
+    df["amount"] = pd.to_numeric(df["amount"],errors="coerce").fillna(0).astype(int)
+    df["paid_amount"] = pd.to_numeric(df["paid_amount"],errors="coerce").fillna(0).astype(int)
 
     if "payment_date" not in df.columns:
         df["payment_date"] = pd.NaT
@@ -222,28 +222,40 @@ def aggregate_customer(df):
         score = calculate_risk_score(r)
         grade = assign_risk_grade(score)
 
-        if grade=="A":
-            limit = r["total_amount"]*1.2
-        elif grade=="B":
-            limit = r["total_amount"]*0.8
-        elif grade=="C":
-            limit = r["total_amount"]*0.5
-        else:
-            limit = 0
-
         rows.append({
             "Customer":r["customer_name"],
             "Total Credit":r["total_amount"],
             "Total Paid":r["total_paid"],
             "Outstanding":r["total_outstanding"],
             "Max Delay":r["max_overdue_days"],
-            "Avg Delay":round(r["avg_payment_delay"],1),
             "Risk Score":score,
-            "Risk Grade":grade,
-            "Suggested Limit":limit
+            "Risk Grade":grade
         })
 
     return pd.DataFrame(rows)
+
+# ---------------------------------------------------------
+# Collection priority
+# ---------------------------------------------------------
+
+def collection_priority(df):
+
+    df = df.copy()
+
+    def norm(series):
+
+        if series.max()==series.min():
+            return pd.Series(0,index=series.index)
+
+        return (series-series.min())/(series.max()-series.min())
+
+    df["out_norm"] = norm(df["Outstanding"])
+    df["delay_norm"] = norm(df["Max Delay"])
+    df["risk_norm"] = norm(df["Risk Score"])
+
+    df["priority_score"] = df["out_norm"] + df["delay_norm"] + df["risk_norm"]
+
+    return df.sort_values("priority_score",ascending=False)
 
 # ---------------------------------------------------------
 # Sidebar
@@ -259,26 +271,6 @@ today_input = st.sidebar.date_input(
 today = pd.Timestamp(today_input)
 
 st.caption(f"📅 Calculated as of: {today.strftime('%d %B %Y')}")
-
-# ---------------------------------------------------------
-# Template
-# ---------------------------------------------------------
-
-template = pd.DataFrame({
-"customer_name":["ABC Stores"],
-"invoice_no":["INV001"],
-"invoice_date":["2026-01-01"],
-"due_date":["2026-01-31"],
-"amount":[10000],
-"paid_amount":[5000],
-"payment_date":["2026-02-10"]
-})
-
-st.download_button(
-"📄 Download Upload Template",
-template.to_csv(index=False),
-"invoice_template.csv"
-)
 
 # ---------------------------------------------------------
 # Upload
@@ -315,8 +307,6 @@ if df_raw is not None:
 
     customer_summary = aggregate_customer(df_inv)
 
-    st.success("Data processed successfully")
-
     # KPIs
     col1,col2,col3,col4 = st.columns(4)
 
@@ -329,23 +319,12 @@ if df_raw is not None:
 
     st.metric("Total Overdue Amount",format_inr(overdue_amt))
 
-    # Filter
-    risk_filter = st.selectbox(
-        "Filter Risk Level",
-        ["All","A","B","C","D"]
-    )
-
-    if risk_filter!="All":
-        customer_summary = customer_summary[
-            customer_summary["Risk Grade"]==risk_filter
-        ]
-
     # Table
-    st.subheader("Customer Risk Analysis")
+    st.subheader("Customer Risk Overview")
 
     st.dataframe(customer_summary,use_container_width=True)
 
-    # Chart
+    # Risk chart
     st.subheader("Risk Distribution")
 
     risk_counts = customer_summary["Risk Grade"].value_counts()
@@ -358,6 +337,22 @@ if df_raw is not None:
     )
 
     st.plotly_chart(fig,use_container_width=True)
+
+    # Customers to call
+    st.subheader("📞 Customers to Call (Collection Priority)")
+
+    priority = collection_priority(customer_summary)
+
+    st.dataframe(
+        priority[[
+            "Customer",
+            "Outstanding",
+            "Max Delay",
+            "Risk Score",
+            "Risk Grade"
+        ]].head(10),
+        use_container_width=True
+    )
 
     # Export
     st.subheader("Export Report")
