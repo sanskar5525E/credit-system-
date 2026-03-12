@@ -134,9 +134,12 @@ CALL_SCRIPTS = {
 def fmt(x): return f"₹{x:,.0f}"
 def pct(a, b): return round((a / b) * 100) if b > 0 else 0
 
+GRADE_RGBA = {"A": "0,229,160", "B": "255,209,102", "C": "255,140,66", "D": "255,56,96"}
+
 def grade_badge(grade):
     m = GRADE_META[grade]
-    return f'<span style="background:rgba({{"A":"0,229,160","B":"255,209,102","C":"255,140,66","D":"255,56,96"}[grade]},0.15);color:{m["color"]};border:1px solid {m["color"]}40;padding:3px 12px;border-radius:20px;font-size:12px;font-weight:700">{grade} · {m["label"]}</span>'
+    rgba = GRADE_RGBA[grade]
+    return f'<span style="background:rgba({rgba},0.15);color:{m["color"]};border:1px solid {m["color"]}40;padding:3px 12px;border-radius:20px;font-size:12px;font-weight:700">{grade} · {m["label"]}</span>'
 
 # ─── Data Generation ──────────────────────────────────────────────────────────
 def generate_example_data():
@@ -378,13 +381,14 @@ if df_raw is not None:
     rec_cols = st.columns(4)
     for col, (g_key, m) in zip(rec_cols, GRADE_META.items()):
         cnt = int((summary["Risk Grade"] == g_key).sum())
+        rgba = GRADE_RGBA[g_key]
         col.markdown(f"""
-        <div style="background:rgba({{"A":"0,229,160","B":"255,209,102","C":"255,140,66","D":"255,56,96"}}["{g_key}"],0.08);
+        <div style="background:rgba({rgba},0.08);
                     border:1px solid {m["color"]}40;border-radius:14px;padding:16px;">
           <div style="color:{m["color"]};font-weight:700;font-size:16px;margin-bottom:4px">Grade {g_key} · {cnt} customers</div>
           <div style="color:#C8D8E8;font-size:12px;margin-bottom:6px">📋 {m["action"]}</div>
           <div style="color:#C8D8E8;font-size:12px">📞 {m["call"]}</div>
-        </div>""".replace('["A"]','["A"]'), unsafe_allow_html=True)
+        </div>""", unsafe_allow_html=True)
 
     st.markdown("<div style='height:24px'/>", unsafe_allow_html=True)
 
@@ -452,9 +456,10 @@ if df_raw is not None:
         st.markdown("### 📋 Call Scripts by Customer")
         for _, row in filtered.iterrows():
             m = GRADE_META[row["Risk Grade"]]
+            rgba = GRADE_RGBA[row["Risk Grade"]]
             with st.expander(f"{row['Risk Grade']} · {row['Customer']} — {row['Call Type']} · Outstanding: {fmt(row['Outstanding'])}"):
                 st.markdown(f"""
-                <div style="background:rgba({{"A":"0,229,160","B":"255,209,102","C":"255,140,66","D":"255,56,96"}}["{row['Risk Grade']}"],0.08);
+                <div style="background:rgba({rgba},0.08);
                             border:1px solid {m["color"]}40;border-radius:12px;padding:16px;margin-bottom:12px;">
                   <div style="font-size:11px;color:{m["color"]};letter-spacing:0.1em;margin-bottom:8px">SUGGESTED SCRIPT</div>
                   <div style="color:#C8D8E8;font-size:14px;line-height:1.7">{row["Call Script"]}</div>
