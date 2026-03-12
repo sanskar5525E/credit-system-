@@ -126,7 +126,7 @@ def calculate_invoice_metrics(df,today):
 
     df.loc[mask_paid_late,"paid_late"] = True
 
-    df["overdue_days"] = df["overdue_days"].clip(lower=0)
+    df["overdue_days"] = df["overdue_days"].clip(lower=0, upper=180)
 
     return df
 
