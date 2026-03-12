@@ -1,35 +1,48 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import random
-from datetime import datetime, timedelta
+from datetime import datetime
 import plotly.express as px
 import io
 
 st.set_page_config(page_title="Wholesale Credit Risk Dashboard", layout="wide")
 st.title("📊 Wholesale Customer Risk Dashboard")
 
+# -------------------------------------------------------------------
+# Helper functions
+# -------------------------------------------------------------------
 def format_inr(x):
+    """Return currency string (for display only)."""
     return f"₹{x:,.2f}"
 
 def generate_example_data():
+    """Generate realistic wholesale payment patterns."""
     np.random.seed(42)
-    random.seed(42)
     customers = ['ABC Corp', 'XYZ Ltd', 'Mega Distributors', 'Beta Stores', 'Gamma Inc', 'Delta Traders']
     data = []
-    today = pd.Timestamp.now().normalize()
+    # Use a fixed "today" for example data so overdue is consistent
+    example_today = pd.Timestamp('2025-03-01')
     for cust in customers:
         n_invoices = np.random.randint(3, 10)
         for i in range(n_invoices):
-            invoice_date = today - pd.Timedelta(days=np.random.randint(1, 180))
+            invoice_date = example_today - pd.Timedelta(days=np.random.randint(1, 180))
             due_date = invoice_date + pd.Timedelta(days=30)
             amount = np.random.randint(1000, 50000)
-            if np.random.rand() > 0.3:
+            # Payment patterns: 30% on time, 30% late, 20% partial, 20% unpaid
+            r = np.random.rand()
+            if r < 0.3:          # paid on time
                 paid_amount = amount
-                payment_date = due_date + pd.Timedelta(days=np.random.randint(-5, 60))
-            else:
-                paid_amount = amount * np.random.uniform(0, 0.9)
-                payment_date = pd.NaT
+                payment_date = due_date - pd.Timedelta(days=np.random.randint(0, 5))
+            elif r < 0.6:         # paid late
+                paid_amount = amount
+                payment_date = due_date + pd.Timedelta(days=np.random.randint(1, 60))
+            elif r < 0.8:         # partial payment
+                paid_amount = amount * np.random.uniform(0.1, 0.9)
+                payment_date = due_date + pd.Timedelta(days=np.random.randint(-5, 90))
+            else:                  # unpaid
+                paid_amount = 0
+                payment_date = None
+
             data.append({
                 'customer_name': cust,
                 'invoice_no': f'INV-{cust[:3]}-{i:03d}',
@@ -37,7 +50,7 @@ def generate_example_data():
                 'due_date': due_date,
                 'amount': amount,
                 'paid_amount': paid_amount,
-                'payment_date': payment_date if not pd.isna(payment_date) else None
+                'payment_date': payment_date
             })
     return pd.DataFrame(data)
 
@@ -60,159 +73,155 @@ def clean_data(df):
     return df
 
 def calculate_invoice_metrics(df, today):
+    """Add overdue_days, paid_late, fully_paid columns."""
     df = df.copy()
+    df["invoice_date"] = pd.to_datetime(df["invoice_date"])
+    df["due_date"] = pd.to_datetime(df["due_date"])
+    df["payment_date"] = pd.to_datetime(df["payment_date"])
 
-    # Ensure datetime format
-    df["invoice_date"] = pd.to_datetime(df["invoice_date"], errors="coerce")
-    df["due_date"] = pd.to_datetime(df["due_date"], errors="coerce")
-    df["payment_date"] = pd.to_datetime(df["payment_date"], errors="coerce")
-
-    # Outstanding balance
-    df["outstanding"] = df["amount"] - df["paid_amount"]
-    df["outstanding"] = df["outstanding"].clip(lower=0)
-
-    # Initialize overdue column
+    df["outstanding"] = (df["amount"] - df["paid_amount"]).clip(lower=0)
     df["overdue_days"] = 0
-
-    # Case 1: Unpaid or partially paid and overdue
-    mask_unpaid = (df["outstanding"] > 0) & (df["due_date"] < today)
-
-    df.loc[mask_unpaid, "overdue_days"] = (
-        today - df.loc[mask_unpaid, "due_date"]
-    ).dt.days
-
-    # Case 2: Fully paid but paid late
-    mask_paid_late = (
-        (df["paid_amount"] >= df["amount"]) &
-        df["payment_date"].notna() &
-        (df["payment_date"] > df["due_date"])
-    )
-
-    df.loc[mask_paid_late, "overdue_days"] = (
-        df.loc[mask_paid_late, "payment_date"] -
-        df.loc[mask_paid_late, "due_date"]
-    ).dt.days
-
-    # Flag paid late invoices
     df["paid_late"] = False
+    df["fully_paid"] = df["paid_amount"] >= df["amount"]
+
+    # Unpaid or partially paid and overdue
+    mask_unpaid = (df["outstanding"] > 0) & (df["due_date"] < today)
+    df.loc[mask_unpaid, "overdue_days"] = (today - df.loc[mask_unpaid, "due_date"]).dt.days
+
+    # Fully paid but late
+    mask_paid_late = df["fully_paid"] & df["payment_date"].notna() & (df["payment_date"] > df["due_date"])
+    df.loc[mask_paid_late, "overdue_days"] = (df.loc[mask_paid_late, "payment_date"] - df.loc[mask_paid_late, "due_date"]).dt.days
     df.loc[mask_paid_late, "paid_late"] = True
 
-    # Ensure no negative delays
     df["overdue_days"] = df["overdue_days"].clip(lower=0)
-
     return df
 
 def calculate_risk_score(row):
-    score = 0
-    max_days = row["max_overdue_days"]
-    if max_days > 0:
-        if max_days <= 30:
-            score += 10
-        elif max_days <= 60:
-            score += 20
-        elif max_days <= 90:
-            score += 30
-        else:
-            score += 40
-    if row["total_amount"] > 0:
-        overdue_ratio = row["total_outstanding"] / row["total_amount"]
-        score += overdue_ratio * 50
-    if row["total_paid_invoices"] > 0:
-        late_ratio = row["late_paid_count"] / row["total_paid_invoices"]
-        score += late_ratio * 10
-    return min(round(score), 100)
+    """Balanced risk score: 40% overdue, 40% outstanding, 20% payment behaviour."""
+    # Overdue score (max 40) – linear up to 90 days
+    overdue_score = min(row["max_overdue_days"] / 90, 1.0) * 40
+
+    # Outstanding ratio score (max 40)
+    outstanding_ratio = row["total_outstanding"] / row["total_amount"] if row["total_amount"] > 0 else 0
+    outstanding_score = outstanding_ratio * 40
+
+    # Payment behaviour score (max 20) – combines late ratio and payment ratio
+    payment_ratio = row["total_paid"] / row["total_amount"] if row["total_amount"] > 0 else 0
+    late_ratio = row["late_paid_count"] / row["total_paid_invoices"] if row["total_paid_invoices"] > 0 else 0
+    behaviour_score = (1 - payment_ratio) * 10 + late_ratio * 10
+    behaviour_score = min(behaviour_score, 20)
+
+    return min(round(overdue_score + outstanding_score + behaviour_score), 100)
 
 def assign_risk_grade(score):
-    if score <= 10:
-        return "A"
-    elif score <= 30:
-        return "B"
-    elif score <= 60:
-        return "C"
-    else:
-        return "D"
+    if score <= 10: return "A"
+    elif score <= 30: return "B"
+    elif score <= 60: return "C"
+    else: return "D"
 
 def aggregate_customer(df, today):
-    customers = []
-    for name, group in df.groupby("customer_name"):
-        total_amount = group["amount"].sum()
-        total_paid = group["paid_amount"].sum()
-        total_outstanding = total_amount - total_paid
-        overdue = group[group["overdue_days"] > 0]
-        max_overdue_days = overdue["overdue_days"].max() if not overdue.empty else 0
-        late_paid_count = group["paid_late"].sum()
-        total_paid_invoices = group[group["paid_amount"] >= group["amount"]].shape[0]
-        avg_delay = group[group["paid_late"]]["overdue_days"].mean()
-        avg_delay = 0 if pd.isna(avg_delay) else avg_delay
-        row = {
-            "customer_name": name,
-            "total_invoices": group.shape[0],
-            "total_amount": total_amount,
-            "total_paid": total_paid,
-            "total_outstanding": total_outstanding,
-            "max_overdue_days": max_overdue_days,
-            "avg_payment_delay": round(avg_delay, 1),
-            "late_paid_count": late_paid_count,
-            "total_paid_invoices": total_paid_invoices
-        }
+    """Vectorised customer aggregation."""
+    # Add fully_paid flag if not already present
+    if "fully_paid" not in df.columns:
+        df["fully_paid"] = df["paid_amount"] >= df["amount"]
+
+    # Group by customer
+    grouped = df.groupby("customer_name").agg(
+        total_invoices=("invoice_no", "count"),
+        total_amount=("amount", "sum"),
+        total_paid=("paid_amount", "sum"),
+        max_overdue_days=("overdue_days", "max"),
+        late_paid_count=("paid_late", "sum"),
+        fully_paid_count=("fully_paid", "sum")
+    ).reset_index()
+
+    # Total outstanding (never negative)
+    grouped["total_outstanding"] = (grouped["total_amount"] - grouped["total_paid"]).clip(lower=0)
+
+    # Average delay among late payments
+    late_delays = df[df["paid_late"]].groupby("customer_name")["overdue_days"].mean()
+    grouped["avg_payment_delay"] = grouped["customer_name"].map(late_delays).fillna(0)
+
+    # Total paid invoices (fully paid count)
+    grouped["total_paid_invoices"] = grouped["fully_paid_count"]
+
+    # Compute risk score and grade
+    risk_data = []
+    for _, row in grouped.iterrows():
         score = calculate_risk_score(row)
         grade = assign_risk_grade(score)
         if grade == "A":
-            credit_limit = total_amount * 1.2
+            credit_limit = row["total_amount"] * 1.2
         elif grade == "B":
-            credit_limit = total_amount * 0.8
+            credit_limit = row["total_amount"] * 0.8
         elif grade == "C":
-            credit_limit = total_amount * 0.5
+            credit_limit = row["total_amount"] * 0.5
         else:
             credit_limit = 0
-        customers.append({
-            **row,
+        risk_data.append({
+            "customer_name": row["customer_name"],
+            "total_invoices": row["total_invoices"],
+            "total_amount": row["total_amount"],
+            "total_paid": row["total_paid"],
+            "total_outstanding": row["total_outstanding"],
+            "max_overdue_days": row["max_overdue_days"],
+            "avg_payment_delay": round(row["avg_payment_delay"], 1),
+            "late_paid_count": row["late_paid_count"],
+            "total_paid_invoices": row["total_paid_invoices"],
             "risk_score": score,
             "risk_grade": grade,
-            "suggested_credit_limit": credit_limit
+            "suggested_credit_limit": credit_limit,
+            "payment_ratio": round(row["total_paid"] / row["total_amount"], 2) if row["total_amount"] > 0 else 0
         })
-    customer_df = pd.DataFrame(customers)
 
-    # --- Status with emojis, Action with emojis ---
-    status_map = {
-        "A": "🟢 Low Risk",
-        "B": "🟡 Medium Risk",
-        "C": "🟠 High Risk",
-        "D": "🔴 Critical"
-    }
-    action_map = {
-        "A": "✅ Extend credit limit",
-        "B": "👀 Monitor payments closely",
-        "C": "⚠️ Reduce exposure",
-        "D": "🚨 Immediate collection"
-    }
+    customer_df = pd.DataFrame(risk_data)
+
+    # Status & recommendation with emojis
+    status_map = {"A": "🟢 Low Risk", "B": "🟡 Medium Risk", "C": "🟠 High Risk", "D": "🔴 Critical"}
+    action_map = {"A": "✅ Extend credit limit", "B": "👀 Monitor payments closely",
+                  "C": "⚠️ Reduce exposure", "D": "🚨 Immediate collection"}
     customer_df["status"] = customer_df["risk_grade"].map(status_map)
     customer_df["recommendation"] = customer_df["risk_grade"].map(action_map)
     return customer_df
 
-def color_grade(val):
-    if val == "A":
-        return "background-color:#1b5e20; color:white"
-    elif val == "B":
-        return "background-color:#f9a825; color:black"
-    elif val == "C":
-        return "background-color:#ef6c00; color:white"
-    elif val == "D":
-        return "background-color:#c62828; color:white"
-    return ""
-
 def collection_priority(df):
+    """Normalised priority score (higher = call sooner)."""
     df = df.copy()
-    df["priority_score"] = (
-        df["total_outstanding"] * 0.5 +
-        df["max_overdue_days"] * 50 +
-        df["risk_score"] * 20
-    )
+    # Normalise each component to 0-1
+    min_out, max_out = df["total_outstanding"].min(), df["total_outstanding"].max()
+    min_od, max_od = df["max_overdue_days"].min(), df["max_overdue_days"].max()
+    min_risk, max_risk = df["risk_score"].min(), df["risk_score"].max()
+
+    def norm(series, min_val, max_val):
+        if max_val > min_val:
+            return (series - min_val) / (max_val - min_val)
+        return 0
+
+    df["outstanding_norm"] = norm(df["total_outstanding"], min_out, max_out)
+    df["overdue_norm"] = norm(df["max_overdue_days"], min_od, max_od)
+    df["risk_norm"] = norm(df["risk_score"], min_risk, max_risk)
+
+    # Simple sum (equal weight) – you can adjust weights if desired
+    df["priority_score"] = df["outstanding_norm"] + df["overdue_norm"] + df["risk_norm"]
     return df.sort_values("priority_score", ascending=False)
 
+def color_grade(val):
+    if val == "A": return "background-color:#1b5e20; color:white"
+    elif val == "B": return "background-color:#f9a825; color:black"
+    elif val == "C": return "background-color:#ef6c00; color:white"
+    elif val == "D": return "background-color:#c62828; color:white"
+    return ""
+
+# -------------------------------------------------------------------
 # Main app
+# -------------------------------------------------------------------
 if 'use_example' not in st.session_state:
     st.session_state['use_example'] = False
+
+# Sidebar: set reference date
+st.sidebar.header("⚙️ Settings")
+today_input = st.sidebar.date_input("As of date (for overdue calculation)", value=datetime.now().date())
+today = pd.Timestamp(today_input)
 
 col1, col2 = st.columns([3, 1])
 with col1:
@@ -235,14 +244,15 @@ else:
     df_raw = None
 
 if df_raw is not None:
-    today = pd.Timestamp.now().normalize()
     df_clean = clean_data(df_raw)
     df_inv = calculate_invoice_metrics(df_clean, today)
     customer_summary = aggregate_customer(df_inv, today)
 
     st.success("Data processed successfully")
 
-    # --- TRANSPARENT FINANCIAL SUMMARY CARDS (glass effect) ---
+    # -------------------------------------------------------------------
+    # Transparent financial summary cards (unchanged, just using today)
+    # -------------------------------------------------------------------
     total_customers = customer_summary.shape[0]
     total_credits = df_inv["amount"].sum()
     total_paid = customer_summary["total_paid"].sum()
@@ -253,7 +263,7 @@ if df_raw is not None:
     st.markdown("""
     <style>
         .metric-card {
-            background: rgba(20, 20, 30, 0.7);  /* semi-transparent dark */
+            background: rgba(20, 20, 30, 0.7);
             backdrop-filter: blur(8px);
             -webkit-backdrop-filter: blur(8px);
             border-radius: 16px;
@@ -296,59 +306,25 @@ if df_raw is not None:
     """, unsafe_allow_html=True)
 
     st.header("📊 Financial Summary")
-
-    # Row 1: four main metrics
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.markdown(f"""
-        <div class="metric-card">
-            <div><span class="metric-icon">👥</span> <span class="metric-label">Total Customers</span></div>
-            <div class="metric-value">{total_customers}</div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(f"""<div class="metric-card"><div><span class="metric-icon">👥</span> <span class="metric-label">Total Customers</span></div><div class="metric-value">{total_customers}</div></div>""", unsafe_allow_html=True)
     with col2:
-        st.markdown(f"""
-        <div class="metric-card">
-            <div><span class="metric-icon">💰</span> <span class="metric-label">Total Credits</span></div>
-            <div class="metric-value">{format_inr(total_credits)}</div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(f"""<div class="metric-card"><div><span class="metric-icon">💰</span> <span class="metric-label">Total Credits</span></div><div class="metric-value">{format_inr(total_credits)}</div></div>""", unsafe_allow_html=True)
     with col3:
-        st.markdown(f"""
-        <div class="metric-card">
-            <div><span class="metric-icon">💳</span> <span class="metric-label">Total Paid</span></div>
-            <div class="metric-value">{format_inr(total_paid)}</div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(f"""<div class="metric-card"><div><span class="metric-icon">💳</span> <span class="metric-label">Total Paid</span></div><div class="metric-value">{format_inr(total_paid)}</div></div>""", unsafe_allow_html=True)
     with col4:
-        st.markdown(f"""
-        <div class="metric-card">
-            <div><span class="metric-icon">📉</span> <span class="metric-label">Outstanding</span></div>
-            <div class="metric-value">{format_inr(total_outstanding)}</div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(f"""<div class="metric-card"><div><span class="metric-icon">📉</span> <span class="metric-label">Outstanding</span></div><div class="metric-value">{format_inr(total_outstanding)}</div></div>""", unsafe_allow_html=True)
 
-    # Row 2: additional metrics (overdue and high risk)
     col5, col6 = st.columns(2)
     with col5:
-        st.markdown(f"""
-        <div class="metric-card">
-            <div><span class="metric-icon">⏰</span> <span class="metric-label">Overdue Amount</span></div>
-            <div class="metric-value">{format_inr(overdue_amt)}</div>
-            <div class="sub-metric">Outstanding past due date</div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(f"""<div class="metric-card"><div><span class="metric-icon">⏰</span> <span class="metric-label">Overdue Amount</span></div><div class="metric-value">{format_inr(overdue_amt)}</div><div class="sub-metric">Outstanding past due date</div></div>""", unsafe_allow_html=True)
     with col6:
-        st.markdown(f"""
-        <div class="metric-card">
-            <div><span class="metric-icon">⚠️</span> <span class="metric-label">High Risk Customers</span></div>
-            <div class="metric-value">{high_risk}</div>
-            <div class="sub-metric">Grades C & D</div>
-        </div>
-        """, unsafe_allow_html=True)
-    # --- END TRANSPARENT SUMMARY ---
+        st.markdown(f"""<div class="metric-card"><div><span class="metric-icon">⚠️</span> <span class="metric-label">High Risk Customers</span></div><div class="metric-value">{high_risk}</div><div class="sub-metric">Grades C & D</div></div>""", unsafe_allow_html=True)
 
-    # Customer Risk Summary table with Status (emoji) and Action (emoji)
+    # -------------------------------------------------------------------
+    # Customer Risk Summary (with proper numeric formatting)
+    # -------------------------------------------------------------------
     st.header("👥 Customer Risk Summary")
     display_df = customer_summary.copy()
     display_df.rename(columns={
@@ -363,29 +339,42 @@ if df_raw is not None:
         "risk_grade": "Risk",
         "suggested_credit_limit": "Credit Limit",
         "status": "Status",
-        "recommendation": "Suggested Action"
+        "recommendation": "Suggested Action",
+        "payment_ratio": "Payment Ratio"
     }, inplace=True)
-    # Reorder columns
-    cols = ["Customer", "Invoices", "Total Amount", "Paid", "Due", "Overdue Days", "Avg Delay", "Risk Score", "Risk", "Status", "Suggested Action", "Credit Limit"]
+
+    # Keep numeric columns; format via Styler
+    cols = ["Customer", "Invoices", "Total Amount", "Paid", "Due", "Overdue Days", "Avg Delay", "Payment Ratio", "Risk Score", "Risk", "Status", "Suggested Action", "Credit Limit"]
     display_df = display_df[cols]
-    for col in ["Total Amount", "Paid", "Due", "Credit Limit"]:
-        display_df[col] = display_df[col].apply(format_inr)
-    styled = display_df.style.applymap(color_grade, subset=["Risk"])
+
+    styled = (display_df.style
+              .format({
+                  "Total Amount": format_inr,
+                  "Paid": format_inr,
+                  "Due": format_inr,
+                  "Credit Limit": format_inr,
+                  "Payment Ratio": "{:.2%}"
+              })
+              .applymap(color_grade, subset=["Risk"]))
     st.dataframe(styled, use_container_width=True)
 
-    # Risk Distribution chart
+    # -------------------------------------------------------------------
+    # Risk Distribution (now using grade letters)
+    # -------------------------------------------------------------------
     st.header("📊 Risk Distribution")
     grade_counts = customer_summary["risk_grade"].value_counts().reindex(["A", "B", "C", "D"], fill_value=0)
     fig = px.bar(
-        x=["Low", "Medium", "High", "Very High"],
+        x=grade_counts.index,
         y=grade_counts.values,
-        color=["Low", "Medium", "High", "Very High"],
-        color_discrete_map={"Low": "green", "Medium": "gold", "High": "orange", "Very High": "red"},
-        labels={"x": "Risk Level", "y": "Number of Customers"}
+        color=grade_counts.index,
+        color_discrete_map={"A": "green", "B": "gold", "C": "orange", "D": "red"},
+        labels={"x": "Risk Grade", "y": "Number of Customers"}
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    # Top Risky Customers
+    # -------------------------------------------------------------------
+    # Top Risky Customers (C & D)
+    # -------------------------------------------------------------------
     st.header("🚩 Top Risky Customers")
     risky_df = customer_summary[customer_summary["risk_grade"].isin(["C","D"])].copy()
     if not risky_df.empty:
@@ -398,13 +387,16 @@ if df_raw is not None:
             "status": "Status",
             "recommendation": "Suggested Action"
         }, inplace=True)
-        risky_display["Due"] = risky_display["Due"].apply(format_inr)
-        styled_risky = risky_display.style.applymap(color_grade, subset=["Risk"])
+        styled_risky = (risky_display.style
+                        .format({"Due": format_inr})
+                        .applymap(color_grade, subset=["Risk"]))
         st.dataframe(styled_risky, use_container_width=True)
     else:
         st.write("No high-risk customers found.")
 
-    # Customers to Call
+    # -------------------------------------------------------------------
+    # Customers to Call (priority)
+    # -------------------------------------------------------------------
     st.header("📞 Customers to Call")
     priority_df = collection_priority(customer_summary)
     priority_display = priority_df[["customer_name", "total_outstanding", "max_overdue_days", "risk_grade", "status", "recommendation"]].head(10).copy()
@@ -416,11 +408,14 @@ if df_raw is not None:
         "status": "Status",
         "recommendation": "Suggested Action"
     }, inplace=True)
-    priority_display["Due"] = priority_display["Due"].apply(format_inr)
-    styled_priority = priority_display.style.applymap(color_grade, subset=["Risk"])
+    styled_priority = (priority_display.style
+                       .format({"Due": format_inr})
+                       .applymap(color_grade, subset=["Risk"]))
     st.dataframe(styled_priority, use_container_width=True)
 
+    # -------------------------------------------------------------------
     # Download report
+    # -------------------------------------------------------------------
     st.header("📥 Download Report")
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
