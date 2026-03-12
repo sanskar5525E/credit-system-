@@ -89,10 +89,19 @@ def calculate_invoice_metrics(df, today):
     df.loc[mask_unpaid, "overdue_days"] = (today - df.loc[mask_unpaid, "due_date"]).dt.days
 
     # Fully paid but late
-    mask_paid_late = df["fully_paid"] & df["payment_date"].notna() & (df["payment_date"] > df["due_date"])
-    df.loc[mask_paid_late, "overdue_days"] = (df.loc[mask_paid_late, "payment_date"] - df.loc[mask_paid_late, "due_date"]).dt.days
-    df.loc[mask_paid_late, "paid_late"] = True
+    df["fully_paid"] = df["paid_amount"] >= df["amount"]
 
+mask_paid_late = (
+    df["fully_paid"] &
+    (df["payment_date"] > df["due_date"])
+)
+
+df.loc[mask_paid_late, "overdue_days"] = (
+    df.loc[mask_paid_late, "payment_date"] -
+    df.loc[mask_paid_late, "due_date"]
+).dt.days
+
+df.loc[mask_paid_late, "paid_late"] = True
     df["overdue_days"] = df["overdue_days"].clip(lower=0)
     return df
 
