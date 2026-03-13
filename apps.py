@@ -63,7 +63,7 @@ OVERDUE_CAP  = 45
 HISTORY_DIR  = "creditpulse_history"
 CLIENTS_FILE = "creditpulse_clients.json"
 # ── Change this to your own secret developer password ──
-DEV_PASSWORD = "sanskar45"
+DEV_PASSWORD = "creditpulse_dev_2026"
 
 os.makedirs(HISTORY_DIR, exist_ok=True)
 
@@ -580,6 +580,111 @@ with st.sidebar:
         "amount":[10000],"paid_amount":[5000],"payment_date":["2026-02-05"]
     })
     st.download_button("📄 Download Template",template.to_csv(index=False),"template.csv",use_container_width=True)
+
+    # ── Manual Invoice Entry Form ─────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("**➕ Add Invoice Manually**")
+    st.caption("Fill in one invoice at a time. Saved instantly to your history.")
+
+    # Track form visibility in session state
+    if "show_form" not in st.session_state:
+        st.session_state["show_form"] = True
+    if "form_success" not in st.session_state:
+        st.session_state["form_success"] = None
+
+    # Show success message with option to add another
+    if st.session_state["form_success"]:
+        inv_no = st.session_state["form_success"]
+        st.markdown(
+            '<div style="background:rgba(0,229,160,0.1);border:1px solid rgba(0,229,160,0.3);'
+            'border-radius:10px;padding:12px;margin-bottom:10px;">'
+            '<div style="color:#00E5A0;font-weight:700;font-size:13px;">&#10003; Invoice saved!</div>'
+            '<div style="color:#C8D8E8;font-size:12px;margin-top:4px;">'+str(inv_no)+' added to your history.</div>'
+            '</div>', unsafe_allow_html=True)
+        if st.button("➕ Add Another Invoice", use_container_width=True):
+            st.session_state["form_success"] = None
+            st.rerun()
+    else:
+        # ── The form fields ───────────────────────────────────────────────────
+        f_cust = st.text_input("Customer Name", placeholder="e.g. Rajan Traders", key="f_cust")
+
+        # Customer name autocomplete from existing data
+        if st.session_state.get("summary") is not None:
+            existing_customers = st.session_state["summary"]["Customer"].tolist()
+            if existing_customers:
+                st.caption("Existing: " + " · ".join(existing_customers[:4]) +
+                           ("..." if len(existing_customers) > 4 else ""))
+
+        f_inv  = st.text_input("Invoice No", placeholder="e.g. INV-001", key="f_inv")
+
+        col_a, col_b = st.columns(2)
+        with col_a:
+            f_inv_date = st.date_input("Invoice Date", value=datetime.now().date(), key="f_inv_date")
+        with col_b:
+            f_due_date = st.date_input("Due Date",
+                value=(datetime.now() + pd.Timedelta(days=21)).date(), key="f_due_date")
+
+        f_amount = st.number_input("Invoice Amount (Rs.)", min_value=0.0,
+                                    step=500.0, format="%.0f", key="f_amount")
+        f_paid   = st.number_input("Paid Amount (Rs.)",   min_value=0.0,
+                                    step=500.0, format="%.0f", key="f_paid",
+                                    help="Leave 0 if not paid yet")
+
+        f_paid_date = None
+        if f_paid > 0:
+            f_paid_date = st.date_input("Payment Date", value=datetime.now().date(), key="f_paid_date")
+
+        # Validation feedback live
+        errors = []
+        if f_amount > 0 and f_paid > f_amount:
+            errors.append("Paid amount cannot exceed invoice amount.")
+        if f_due_date < f_inv_date:
+            errors.append("Due date cannot be before invoice date.")
+
+        for e in errors:
+            st.markdown(
+                '<div style="color:#FF3860;font-size:11px;margin-top:4px;">&#9888; '+e+'</div>',
+                unsafe_allow_html=True)
+
+        if st.button("💾 Save Invoice", use_container_width=True, key="save_manual_invoice"):
+            # Full validation on submit
+            save_errors = []
+            if not f_cust.strip():
+                save_errors.append("Customer name is required.")
+            if not f_inv.strip():
+                save_errors.append("Invoice number is required.")
+            if f_amount <= 0:
+                save_errors.append("Amount must be greater than 0.")
+            if f_paid > f_amount:
+                save_errors.append("Paid amount cannot exceed invoice amount.")
+            if f_due_date < f_inv_date:
+                save_errors.append("Due date cannot be before invoice date.")
+
+            if save_errors:
+                for e in save_errors:
+                    st.error(e)
+            else:
+                # Build single-row DataFrame
+                new_row = pd.DataFrame([{
+                    "customer_name": f_cust.strip(),
+                    "invoice_no":    f_inv.strip().upper(),
+                    "invoice_date":  pd.Timestamp(f_inv_date),
+                    "due_date":      pd.Timestamp(f_due_date),
+                    "amount":        float(f_amount),
+                    "paid_amount":   float(f_paid),
+                    "payment_date":  pd.Timestamp(f_paid_date) if f_paid_date and f_paid > 0 else pd.NaT,
+                }])
+
+                # Save to history and reprocess dashboard
+                full, new_count, dupes = save_history(bid, new_row)
+                inv, summ, age = process_all(full, today)
+                st.session_state["df_raw"]        = full
+                st.session_state["df_inv"]        = inv
+                st.session_state["summary"]       = summ
+                st.session_state["ageing"]        = age
+                st.session_state["today_cached"]  = str(today)
+                st.session_state["form_success"]  = f_inv.strip().upper()
+                st.rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  INPUT
