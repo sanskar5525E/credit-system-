@@ -61,8 +61,9 @@ CALL_SCRIPTS = {
     "D":"Hello {name}, this is an urgent notice. Outstanding dues of {amount} have been flagged for suspension. Immediate payment is required to avoid legal escalation.",
 }
 OVERDUE_CAP  = 45
-# ── Change this to your own secret developer password ──
-DEV_PASSWORD = "sanskar45"
+# ── Developer password loaded from Streamlit secrets ──
+# Add DEV_PASSWORD = "yourpassword" in Streamlit Cloud → Settings → Secrets
+DEV_PASSWORD = st.secrets.get("DEV_PASSWORD", "creditpulse_dev_2026")
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  SUPABASE CONNECTION  (replaces all file operations)
@@ -139,6 +140,53 @@ def reset_client_password(business_id, new_password):
       .update({"password_hash": hash_pw(new_password)})\
       .eq("business_id", business_id)\
       .execute()
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  CALL LOGS  — saved to Supabase call_logs table
+# ══════════════════════════════════════════════════════════════════════════════
+def save_call_log(bid, customer_name, risk_grade, outcome):
+    """Save a call outcome to Supabase."""
+    try:
+        sb.table("call_logs").insert({
+            "business_id":   bid.upper(),
+            "customer_name": customer_name,
+            "risk_grade":    risk_grade,
+            "outcome":       outcome,
+        }).execute()
+        return True
+    except:
+        return False
+
+def load_call_logs(bid):
+    """Load call logs for a specific business. Returns DataFrame."""
+    try:
+        res = sb.table("call_logs")\
+                .select("*")\
+                .eq("business_id", bid.upper())\
+                .order("logged_at", desc=True)\
+                .execute()
+        if not res.data:
+            return pd.DataFrame()
+        df = pd.DataFrame(res.data)
+        df["logged_at"] = pd.to_datetime(df["logged_at"], errors="coerce")
+        return df[["business_id","customer_name","risk_grade","outcome","logged_at"]]
+    except:
+        return pd.DataFrame()
+
+def load_all_call_logs():
+    """Load ALL call logs across all clients — for developer Excel."""
+    try:
+        res = sb.table("call_logs")\
+                .select("*")\
+                .order("logged_at", desc=True)\
+                .execute()
+        if not res.data:
+            return pd.DataFrame()
+        df = pd.DataFrame(res.data)
+        df["logged_at"] = pd.to_datetime(df["logged_at"], errors="coerce")
+        return df[["business_id","customer_name","risk_grade","outcome","logged_at"]]
+    except:
+        return pd.DataFrame()
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  INVOICE HISTORY  — now reads/writes Supabase invoices table
@@ -546,7 +594,6 @@ if st.session_state["is_dev"]:
     with dev_tab3:
         st.markdown("**Supabase invoices table overview**")
         try:
-            # Count rows per business_id using Supabase
             res = sb.table("invoices").select("business_id").execute()
             if res.data:
                 df_counts = pd.DataFrame(res.data)
@@ -558,6 +605,41 @@ if st.session_state["is_dev"]:
                 st.info("No invoice data yet.")
         except Exception as e:
             st.error("Error loading data: "+str(e))
+
+        st.markdown("---")
+        st.markdown("**📥 All Clients Call Logs**")
+        all_logs = load_all_call_logs()
+        if len(all_logs) == 0:
+            st.info("No call logs saved yet across any client.")
+        else:
+            # Summary per client
+            summary_logs = all_logs.groupby("business_id").agg(
+                Total_Calls=("outcome","count"),
+                Last_Call=("logged_at","max")
+            ).reset_index()
+            summary_logs.columns = ["Business ID","Total Calls","Last Call"]
+            summary_logs["Last Call"] = pd.to_datetime(summary_logs["Last Call"]).dt.strftime("%d %b %Y %H:%M")
+            st.dataframe(summary_logs, use_container_width=True, hide_index=True)
+            st.metric("Total call logs across all clients", str(len(all_logs)))
+
+            # Full Excel with all clients on one sheet
+            all_out = io.BytesIO()
+            export_df = all_logs.copy()
+            export_df.columns = ["Business ID","Customer","Grade","Outcome","Date & Time"]
+            export_df["Date & Time"] = pd.to_datetime(export_df["Date & Time"]).dt.strftime("%d %b %Y %H:%M")
+            with pd.ExcelWriter(all_out, engine="openpyxl") as w:
+                export_df.to_excel(w, sheet_name="All Call Logs", index=False)
+                # Also one sheet per client
+                for bid_name in export_df["Business ID"].unique():
+                    client_df = export_df[export_df["Business ID"]==bid_name]
+                    sheet_name = str(bid_name)[:31]  # Excel sheet name max 31 chars
+                    client_df.to_excel(w, sheet_name=sheet_name, index=False)
+            st.download_button(
+                "⬇ Download All Clients Call Logs (Excel)",
+                all_out.getvalue(),
+                "all_call_logs.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
     st.stop()
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -880,9 +962,39 @@ else:
             with st.expander("{} | {} | {} | {}".format(gk,row["Customer"],row["Call Type"],fmt(row["Outstanding"]))):
                 st.markdown(script_html(gk,row["Call Script"],fmt(row["Outstanding"]),row["Max Overdue(d)"],row["Credit Action"]),unsafe_allow_html=True)
                 outcome = st.selectbox("Call Outcome",["Select outcome","Contacted","No Answer","Promise to Pay","Disputed","Paid in Full"],key="out_{}".format(row["Customer"]))
-                st.text_area("Call Notes",placeholder="Notes...",key="note_{}".format(row["Customer"]),height=70)
                 if st.button("Save Call Log",key="log_{}".format(row["Customer"])):
-                    st.success("Logged for {} — {}".format(row["Customer"],outcome))
+                    if outcome == "Select outcome":
+                        st.warning("Please select an outcome before saving.")
+                    else:
+                        saved = save_call_log(bid, row["Customer"], row["Risk Grade"], outcome)
+                        if saved:
+                            st.success("✓ Logged — {} · {}".format(row["Customer"], outcome))
+                        else:
+                            st.error("Failed to save. Check your Supabase connection.")
+
+        # ── Call Logs Excel Download ──────────────────────────────────────────
+        st.markdown("---")
+        st.markdown("### 📥 Download Call Logs")
+        logs_df = load_call_logs(bid)
+        if len(logs_df) == 0:
+            st.info("No call logs saved yet. Use the outcome logger above.")
+        else:
+            st.caption("{} call logs saved for your account.".format(len(logs_df)))
+            # Preview
+            preview = logs_df.copy()
+            preview.columns = ["Business ID","Customer","Grade","Outcome","Date & Time"]
+            preview["Date & Time"] = preview["Date & Time"].dt.strftime("%d %b %Y %H:%M")
+            st.dataframe(preview.drop(columns=["Business ID"]), use_container_width=True, hide_index=True)
+            # Build Excel
+            log_out = io.BytesIO()
+            with pd.ExcelWriter(log_out, engine="openpyxl") as w:
+                preview.to_excel(w, sheet_name="Call Logs", index=False)
+            st.download_button(
+                "⬇ Download My Call Logs (Excel)",
+                log_out.getvalue(),
+                "call_logs_{}.xlsx".format(bid),
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
         ce = filtered[["Customer","Risk Grade","Outstanding","Max Overdue(d)","Call Type","Credit Action"]].copy()
         ce["Outstanding"] = ce["Outstanding"].apply(fmt)
         st.download_button("⬇ Export Call List",ce.to_csv(index=False),"call_list.csv")
@@ -952,7 +1064,7 @@ else:
     with tab_hist:
         st.markdown("### 📁 My Invoice History")
         st.caption("All your invoice data stored permanently in Supabase database.")
-        hist_df = load_history(bid)
+        hist_df = st.session_state.get("df_raw", pd.DataFrame())
         if len(hist_df)==0:
             st.info("No history yet. Upload invoices or add manually from the sidebar.")
         else:
