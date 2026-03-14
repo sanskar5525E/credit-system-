@@ -3,7 +3,8 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 import plotly.graph_objects as go
-import io, os, re, json, hashlib
+import io, re, hashlib
+from supabase import create_client
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  PAGE CONFIG
@@ -60,86 +61,144 @@ CALL_SCRIPTS = {
     "D":"Hello {name}, this is an urgent notice. Outstanding dues of {amount} have been flagged for suspension. Immediate payment is required to avoid legal escalation.",
 }
 OVERDUE_CAP  = 45
-HISTORY_DIR  = "creditpulse_history"
-CLIENTS_FILE = "creditpulse_clients.json"
 # ── Change this to your own secret developer password ──
 DEV_PASSWORD = "sanskar45"
 
-os.makedirs(HISTORY_DIR, exist_ok=True)
+# ══════════════════════════════════════════════════════════════════════════════
+#  SUPABASE CONNECTION  (replaces all file operations)
+# ══════════════════════════════════════════════════════════════════════════════
+@st.cache_resource
+def get_supabase():
+    """Single connection reused across all reruns."""
+    return create_client(
+        st.secrets["SUPABASE_URL"],
+        st.secrets["SUPABASE_KEY"]
+    )
+
+sb = get_supabase()
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  AUTH HELPERS
+#  AUTH  — now reads/writes Supabase clients table
 # ══════════════════════════════════════════════════════════════════════════════
 def hash_pw(pw):
     return hashlib.sha256(pw.strip().encode()).hexdigest()
 
-def load_clients():
-    if os.path.exists(CLIENTS_FILE):
-        with open(CLIENTS_FILE,"r") as f:
-            return json.load(f)
-    # Default: empty client list
-    return {}
-
-def save_clients(clients):
-    with open(CLIENTS_FILE,"w") as f:
-        json.dump(clients, f, indent=2)
-
 def client_login(business_id, password):
-    """Returns (success, message)"""
-    clients = load_clients()
-    bid_upper = business_id.strip().upper()
-    if bid_upper not in clients:
-        return False, "Business ID not found. Contact your service provider."
-    c = clients[bid_upper]
-    if not c.get("active", False):
-        return False, "Your account is deactivated. Contact your service provider."
-    if hash_pw(password) != c["password_hash"]:
-        return False, "Incorrect password."
-    return True, "OK"
+    """Check credentials against Supabase clients table."""
+    try:
+        res = sb.table("clients")\
+                .select("*")\
+                .eq("business_id", business_id.strip().upper())\
+                .execute()
+        if not res.data:
+            return False, "Business ID not found. Contact your service provider."
+        c = res.data[0]
+        if not c.get("active", False):
+            return False, "Your account is deactivated. Contact your service provider."
+        if hash_pw(password) != c["password_hash"]:
+            return False, "Incorrect password."
+        return True, c.get("display_name", business_id)
+    except Exception as e:
+        return False, "Connection error. Please try again."
+
+def load_all_clients():
+    """Load all clients for developer panel."""
+    try:
+        res = sb.table("clients").select("*").order("added", desc=True).execute()
+        return res.data or []
+    except:
+        return []
+
+def add_client(business_id, display_name, password):
+    """Add new client to Supabase."""
+    try:
+        sb.table("clients").insert({
+            "business_id":   business_id.strip().upper(),
+            "display_name":  display_name.strip() or business_id.strip().upper(),
+            "password_hash": hash_pw(password),
+            "active":        True,
+            "added":         datetime.now().strftime("%Y-%m-%d"),
+        }).execute()
+        return True, "OK"
+    except Exception as e:
+        err = str(e)
+        if "duplicate" in err.lower() or "unique" in err.lower():
+            return False, "Business ID already exists."
+        return False, "Error: " + err
+
+def toggle_client(business_id, current_active):
+    """Activate or deactivate a client."""
+    sb.table("clients")\
+      .update({"active": not current_active})\
+      .eq("business_id", business_id)\
+      .execute()
+
+def reset_client_password(business_id, new_password):
+    """Reset a client's password."""
+    sb.table("clients")\
+      .update({"password_hash": hash_pw(new_password)})\
+      .eq("business_id", business_id)\
+      .execute()
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  HISTORY HELPERS  (BUG FIXED: keep="last" so updated payments win)
+#  INVOICE HISTORY  — now reads/writes Supabase invoices table
 # ══════════════════════════════════════════════════════════════════════════════
-def safe_bid(bid):
-    return re.sub(r"[^a-zA-Z0-9_]","_", bid.strip().upper())
-
-def history_path(bid):
-    return os.path.join(HISTORY_DIR,"history_{}.csv".format(safe_bid(bid)))
-
 def load_history(bid):
-    path = history_path(bid)
-    if os.path.exists(path):
-        df = pd.read_csv(path)
+    """
+    Load all invoices for this business from Supabase.
+    Returns DataFrame — same shape as before so nothing else changes.
+    """
+    try:
+        res = sb.table("invoices")\
+                .select("*")\
+                .eq("business_id", bid.upper())\
+                .execute()
+        if not res.data:
+            return pd.DataFrame()
+        df = pd.DataFrame(res.data)
         for c in ["invoice_date","due_date","payment_date"]:
             if c in df.columns:
                 df[c] = pd.to_datetime(df[c], errors="coerce")
         return df
-    return pd.DataFrame()
+    except:
+        return pd.DataFrame()
 
 def save_history(bid, df_new):
     """
-    Append + deduplicate.
-    BUG FIX: keep='last' so if paid_amount updated in new upload, it wins.
-    Returns (final_df, new_rows, duplicates_updated)
+    Upsert invoices into Supabase.
+    UPSERT = insert if new, update if (business_id + invoice_no) already exists.
+    This replaces the entire CSV dedup logic in one Supabase call.
+    Returns (full_df, new_rows_approx, updated_rows_approx)
     """
-    path   = history_path(bid)
     df_new = df_new.copy()
-    df_new["uploaded_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-    if os.path.exists(path):
-        df_old   = pd.read_csv(path)
-        combined = pd.concat([df_old, df_new], ignore_index=True)
-        before   = len(combined)
-        # keep='last' → new upload overwrites old record for same invoice
-        combined.drop_duplicates(subset=["customer_name","invoice_no"], keep="last", inplace=True)
-        dupes    = before - len(combined)
-        new_rows = len(df_new) - dupes
-    else:
-        combined = df_new.copy()
-        dupes, new_rows = 0, len(df_new)
+    # Prepare rows — convert dates to strings for JSON
+    rows = []
+    for _, r in df_new.iterrows():
+        row = {
+            "business_id":   bid.upper(),
+            "customer_name": str(r["customer_name"]),
+            "invoice_no":    str(r["invoice_no"]).upper(),
+            "invoice_date":  str(r["invoice_date"].date()) if pd.notna(r.get("invoice_date")) else None,
+            "due_date":      str(r["due_date"].date())     if pd.notna(r.get("due_date"))     else None,
+            "amount":        float(r["amount"]),
+            "paid_amount":   float(r.get("paid_amount", 0)),
+            "payment_date":  str(r["payment_date"].date()) if pd.notna(r.get("payment_date")) else None,
+        }
+        rows.append(row)
 
-    combined.to_csv(path, index=False)
-    return combined, new_rows, dupes
+    # Batch upsert — Supabase handles dedup via UNIQUE(business_id, invoice_no)
+    # Send in chunks of 500 to avoid payload limits
+    chunk_size = 500
+    for i in range(0, len(rows), chunk_size):
+        chunk = rows[i:i+chunk_size]
+        sb.table("invoices")\
+          .upsert(chunk, on_conflict="business_id,invoice_no")\
+          .execute()
+
+    # Reload full history from DB to get accurate count
+    full_df = load_history(bid)
+    return full_df, len(df_new), 0
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  UI HELPERS
@@ -189,7 +248,7 @@ def trend_badge(trend):
     return '<span style="background:rgba('+rgba+',0.15);color:'+c+';padding:2px 10px;border-radius:20px;font-size:11px;font-weight:600">'+label+'</span>'
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  DATA
+#  DATA PROCESSING
 # ══════════════════════════════════════════════════════════════════════════════
 def generate_example_data():
     np.random.seed(42)
@@ -213,8 +272,7 @@ def generate_example_data():
 
 def clean_data(df):
     df = df.copy()
-    # Drop computed/meta columns before cleaning
-    drop_cols = ["outstanding","fully_paid","overdue_days","paid_late","uploaded_at"]
+    drop_cols = ["outstanding","fully_paid","overdue_days","paid_late","uploaded_at","id","business_id"]
     df.drop(columns=[c for c in drop_cols if c in df.columns], inplace=True)
     df.columns = df.columns.str.lower().str.strip().str.replace(" ","_")
     for col in ["customer_name","invoice_no","invoice_date","due_date","amount","paid_amount"]:
@@ -314,7 +372,6 @@ def aggregate(df):
     return pd.DataFrame(rows).sort_values("Risk Score",ascending=False).reset_index(drop=True)
 
 def process_all(raw_df, today):
-    """BUG FIX: always process from raw, never from df_inv"""
     clean = clean_data(raw_df)
     inv   = calc_metrics(clean, today)
     summ  = aggregate(inv)
@@ -336,16 +393,17 @@ def stepper(active):
 # ══════════════════════════════════════════════════════════════════════════════
 defaults = {
     "authenticated":False, "is_dev":False,
-    "business_id":None,    "df_raw":None,
-    "df_inv":None,         "summary":None,
-    "ageing":None,         "today_cached":None,
+    "business_id":None,    "display_name":None,
+    "df_raw":None,         "df_inv":None,
+    "summary":None,        "ageing":None,
+    "today_cached":None,
 }
 for k,v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  HEADER (always visible)
+#  HEADER
 # ══════════════════════════════════════════════════════════════════════════════
 st.markdown("""
 <div style="padding:12px 0 24px;position:relative;">
@@ -366,14 +424,12 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  LOGIN SCREEN  (shown when not authenticated)
+#  LOGIN SCREEN
 # ══════════════════════════════════════════════════════════════════════════════
 if not st.session_state["authenticated"]:
-
     st.markdown("<div style='height:20px'/>",unsafe_allow_html=True)
     lcol, _, rcol = st.columns([1,0.1,1])
 
-    # ── Client Login ──────────────────────────────────────────────────────────
     with lcol:
         st.markdown("""
         <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);
@@ -383,21 +439,21 @@ if not st.session_state["authenticated"]:
         </div>
         """, unsafe_allow_html=True)
         c_bid = st.text_input("Business ID", placeholder="e.g. RAJ_TRADERS", key="login_bid")
-        c_pw  = st.text_input("Password",    type="password", key="login_pw")
+        c_pw  = st.text_input("Password", type="password", key="login_pw")
         if st.button("Login", use_container_width=True, key="client_login_btn"):
             if c_bid.strip() and c_pw.strip():
-                ok, msg = client_login(c_bid, c_pw)
+                ok, result = client_login(c_bid, c_pw)
                 if ok:
                     st.session_state["authenticated"] = True
                     st.session_state["is_dev"]        = False
                     st.session_state["business_id"]   = c_bid.strip().upper()
+                    st.session_state["display_name"]  = result
                     st.rerun()
                 else:
-                    st.error(msg)
+                    st.error(result)
             else:
                 st.warning("Please enter both Business ID and password.")
 
-    # ── Developer Login ───────────────────────────────────────────────────────
     with rcol:
         st.markdown("""
         <div style="background:rgba(91,158,244,0.05);border:1px solid rgba(91,158,244,0.15);
@@ -415,57 +471,48 @@ if not st.session_state["authenticated"]:
                 st.rerun()
             else:
                 st.error("Wrong developer password.")
-
     st.stop()
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  DEVELOPER PANEL
 # ══════════════════════════════════════════════════════════════════════════════
 if st.session_state["is_dev"]:
-
     st.markdown("### ⚙️ Developer Panel")
-    st.caption("Manage client accounts, passwords, and access.")
-
+    st.caption("Manage client accounts and passwords. All data stored in Supabase.")
     if st.button("Logout", key="dev_logout"):
         for k,v in defaults.items(): st.session_state[k]=v
         st.rerun()
 
-    clients = load_clients()
-
     dev_tab1, dev_tab2, dev_tab3 = st.tabs(["👥 All Clients","➕ Add Client","📊 Storage Overview"])
 
-    # ── All Clients ───────────────────────────────────────────────────────────
     with dev_tab1:
+        clients = load_all_clients()
         if not clients:
-            st.info("No clients added yet. Use Add Client tab.")
+            st.info("No clients yet. Use Add Client tab.")
         else:
             st.markdown("**{} registered clients**".format(len(clients)))
-            for bid, info in clients.items():
-                hist   = load_history(bid)
-                active = info.get("active", False)
-                status_color  = "#00E5A0" if active else "#FF3860"
-                status_label  = "Active" if active else "Deactivated"
-                c1,c2,c3,c4 = st.columns([3,2,2,2])
-                with c1:
+            for c in clients:
+                bid    = c["business_id"]
+                active = c.get("active", False)
+                sc, sl = ("#00E5A0","Active") if active else ("#FF3860","Deactivated")
+                col1,col2,col3,col4 = st.columns([3,2,2,2])
+                with col1:
                     st.markdown(
                         '<div style="padding:12px;background:rgba(255,255,255,0.03);border-radius:10px;border:1px solid rgba(255,255,255,0.07);">'
                         '<div style="font-weight:700;color:#C8D8E8;">'+bid+'</div>'
-                        '<div style="font-size:11px;color:#8899AA;">Added: '+info.get("added","—")+'</div>'
+                        '<div style="font-size:11px;color:#8899AA;">'+str(c.get("display_name",""))+'</div>'
                         '</div>', unsafe_allow_html=True)
-                with c2:
-                    st.markdown('<div style="padding:12px;"><span style="color:'+status_color+';font-size:12px;font-weight:600;">&#9679; '+status_label+'</span></div>',unsafe_allow_html=True)
-                with c3:
-                    st.markdown('<div style="padding:12px;font-size:12px;color:#8899AA;">{:,} invoice rows</div>'.format(len(hist)),unsafe_allow_html=True)
-                with c4:
-                    tog_label = "Deactivate" if active else "Activate"
-                    if st.button(tog_label, key="tog_{}".format(bid)):
-                        clients[bid]["active"] = not active
-                        save_clients(clients)
+                with col2:
+                    st.markdown('<div style="padding:12px;"><span style="color:'+sc+';font-size:12px;font-weight:600;">&#9679; '+sl+'</span></div>',unsafe_allow_html=True)
+                with col3:
+                    st.markdown('<div style="padding:12px;font-size:12px;color:#8899AA;">Added: '+str(c.get("added","—"))+'</div>',unsafe_allow_html=True)
+                with col4:
+                    if st.button("Deactivate" if active else "Activate", key="tog_"+bid):
+                        toggle_client(bid, active)
                         st.rerun()
-                    if st.button("Reset PW", key="rpw_{}".format(bid)):
+                    if st.button("Reset PW", key="rpw_"+bid):
                         st.session_state["reset_pw_target"] = bid
 
-            # Password reset inline
             if st.session_state.get("reset_pw_target"):
                 target = st.session_state["reset_pw_target"]
                 st.markdown("---")
@@ -473,69 +520,51 @@ if st.session_state["is_dev"]:
                 new_pw = st.text_input("New Password", type="password", key="new_pw_input")
                 if st.button("Confirm Reset"):
                     if new_pw.strip():
-                        clients[target]["password_hash"] = hash_pw(new_pw)
-                        save_clients(clients)
+                        reset_client_password(target, new_pw)
                         st.session_state["reset_pw_target"] = None
                         st.success("Password reset for {}.".format(target))
                         st.rerun()
                     else:
                         st.error("Password cannot be empty.")
 
-    # ── Add Client ────────────────────────────────────────────────────────────
     with dev_tab2:
         st.markdown("**Add a new client**")
-        st.caption("The client will use this Business ID and password to log in.")
         n_bid  = st.text_input("Business ID", placeholder="e.g. RAJ_TRADERS", key="new_bid")
-        n_name = st.text_input("Business Name (display)", placeholder="Rajan Traders, Nagpur", key="new_name")
+        n_name = st.text_input("Business Name", placeholder="Rajan Traders, Nagpur", key="new_name")
         n_pw   = st.text_input("Password", type="password", key="new_pw")
         if st.button("Add Client", use_container_width=True):
             if n_bid.strip() and n_pw.strip():
-                bid_clean = n_bid.strip().upper()
-                if bid_clean in clients:
-                    st.error("Business ID already exists.")
-                else:
-                    clients[bid_clean] = {
-                        "display_name":  n_name.strip() or bid_clean,
-                        "password_hash": hash_pw(n_pw),
-                        "active":        True,
-                        "added":         datetime.now().strftime("%Y-%m-%d"),
-                    }
-                    save_clients(clients)
-                    st.success("Client **{}** added successfully. Share the Business ID and password with them.".format(bid_clean))
+                ok, msg = add_client(n_bid, n_name, n_pw)
+                if ok:
+                    st.success("Client **{}** added. Share credentials with them.".format(n_bid.strip().upper()))
                     st.rerun()
+                else:
+                    st.error(msg)
             else:
                 st.error("Business ID and Password are required.")
 
-    # ── Storage Overview ──────────────────────────────────────────────────────
     with dev_tab3:
-        st.markdown("**All history files on server**")
-        files = [f for f in os.listdir(HISTORY_DIR) if f.endswith(".csv")]
-        if not files:
-            st.info("No history files yet.")
-        else:
-            total_rows = 0
-            for f in sorted(files):
-                fpath = os.path.join(HISTORY_DIR,f)
-                df_tmp = pd.read_csv(fpath)
-                total_rows += len(df_tmp)
-                bid_name = f.replace("history_","").replace(".csv","")
-                st.markdown(
-                    '<div style="display:flex;justify-content:space-between;padding:10px 14px;'
-                    'background:rgba(255,255,255,0.03);border-radius:8px;margin-bottom:6px;">'
-                    '<span style="color:#C8D8E8;font-size:13px;">'+bid_name+'</span>'
-                    '<span style="color:#8899AA;font-size:12px;">{:,} rows &nbsp;·&nbsp; {:.1f} KB</span>'.format(len(df_tmp), os.path.getsize(fpath)/1024)+
-                    '</div>', unsafe_allow_html=True)
-            st.markdown("---")
-            st.metric("Total rows across all clients", "{:,}".format(total_rows))
-
+        st.markdown("**Supabase invoices table overview**")
+        try:
+            # Count rows per business_id using Supabase
+            res = sb.table("invoices").select("business_id").execute()
+            if res.data:
+                df_counts = pd.DataFrame(res.data)
+                counts = df_counts["business_id"].value_counts().reset_index()
+                counts.columns = ["Business ID","Invoice Rows"]
+                st.dataframe(counts, use_container_width=True, hide_index=True)
+                st.metric("Total invoice rows across all clients", "{:,}".format(len(res.data)))
+            else:
+                st.info("No invoice data yet.")
+        except Exception as e:
+            st.error("Error loading data: "+str(e))
     st.stop()
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  SIDEBAR  (client view)
+#  CLIENT SIDEBAR
 # ══════════════════════════════════════════════════════════════════════════════
-bid = st.session_state["business_id"]
-clients = load_clients()
-display_name = clients.get(bid,{}).get("display_name", bid)
+bid          = st.session_state["business_id"]
+display_name = st.session_state.get("display_name") or bid
 
 with st.sidebar:
     st.markdown("### ⚡ CreditPulse")
@@ -551,7 +580,7 @@ with st.sidebar:
     today_input = st.date_input("📅 Calculation Date", value=datetime.now().date())
     today = pd.Timestamp(today_input)
 
-    # BUG FIX: reprocess from df_raw, not from df_inv
+    # Reprocess when date changes
     if st.session_state["today_cached"] != str(today) and st.session_state["df_raw"] is not None:
         inv, summ, age = process_all(st.session_state["df_raw"], today)
         st.session_state["df_inv"]       = inv
@@ -567,13 +596,16 @@ with st.sidebar:
     st.markdown("**Scoring — FMCG India**")
     st.caption("Overdue cap: 45 days\nOverdue: 40 pts · Outstanding: 40 pts · Behaviour: 20 pts")
     st.markdown("---")
-    hist_rows = len(load_history(bid))
-    if hist_rows>0:
-        st.caption("Saved history: {:,} invoice rows".format(hist_rows))
+
+    # Show how many rows are saved in DB
+    if st.session_state.get("df_raw") is not None:
+        st.caption("Loaded: {:,} invoice rows".format(len(st.session_state["df_raw"])))
+
     if st.button("🔄 Reset / Load New Data", use_container_width=True):
         for k in ["df_raw","df_inv","summary","ageing","today_cached"]:
             st.session_state[k]=None
         st.rerun()
+
     template = pd.DataFrame({
         "customer_name":["ABC Stores"],"invoice_no":["INV001"],
         "invoice_date":["2026-01-01"],"due_date":["2026-01-21"],
@@ -584,87 +616,62 @@ with st.sidebar:
     # ── Manual Invoice Entry Form ─────────────────────────────────────────────
     st.markdown("---")
     st.markdown("**➕ Add Invoice Manually**")
-    st.caption("Fill in one invoice at a time. Saved instantly to your history.")
+    st.caption("Fill one invoice at a time. Saved to database instantly.")
 
-    # Track form visibility in session state
     if "show_form" not in st.session_state:
         st.session_state["show_form"] = True
     if "form_success" not in st.session_state:
         st.session_state["form_success"] = None
 
-    # Show success message with option to add another
     if st.session_state["form_success"]:
         inv_no = st.session_state["form_success"]
         st.markdown(
             '<div style="background:rgba(0,229,160,0.1);border:1px solid rgba(0,229,160,0.3);'
             'border-radius:10px;padding:12px;margin-bottom:10px;">'
             '<div style="color:#00E5A0;font-weight:700;font-size:13px;">&#10003; Invoice saved!</div>'
-            '<div style="color:#C8D8E8;font-size:12px;margin-top:4px;">'+str(inv_no)+' added to your history.</div>'
+            '<div style="color:#C8D8E8;font-size:12px;margin-top:4px;">'+str(inv_no)+' added to database.</div>'
             '</div>', unsafe_allow_html=True)
         if st.button("➕ Add Another Invoice", use_container_width=True):
             st.session_state["form_success"] = None
             st.rerun()
     else:
-        # ── The form fields ───────────────────────────────────────────────────
         f_cust = st.text_input("Customer Name", placeholder="e.g. Rajan Traders", key="f_cust")
-
-        # Customer name autocomplete from existing data
         if st.session_state.get("summary") is not None:
             existing_customers = st.session_state["summary"]["Customer"].tolist()
             if existing_customers:
                 st.caption("Existing: " + " · ".join(existing_customers[:4]) +
-                           ("..." if len(existing_customers) > 4 else ""))
-
-        f_inv  = st.text_input("Invoice No", placeholder="e.g. INV-001", key="f_inv")
-
-        col_a, col_b = st.columns(2)
+                           ("..." if len(existing_customers)>4 else ""))
+        f_inv = st.text_input("Invoice No", placeholder="e.g. INV-001", key="f_inv")
+        col_a,col_b = st.columns(2)
         with col_a:
             f_inv_date = st.date_input("Invoice Date", value=datetime.now().date(), key="f_inv_date")
         with col_b:
             f_due_date = st.date_input("Due Date",
-                value=(datetime.now() + pd.Timedelta(days=21)).date(), key="f_due_date")
-
-        f_amount = st.number_input("Invoice Amount (Rs.)", min_value=0.0,
-                                    step=500.0, format="%.0f", key="f_amount")
-        f_paid   = st.number_input("Paid Amount (Rs.)",   min_value=0.0,
-                                    step=500.0, format="%.0f", key="f_paid",
+                value=(datetime.now()+pd.Timedelta(days=21)).date(), key="f_due_date")
+        f_amount = st.number_input("Amount (Rs.)", min_value=0.0, step=500.0, format="%.0f", key="f_amount")
+        f_paid   = st.number_input("Paid Amount (Rs.)", min_value=0.0, step=500.0, format="%.0f", key="f_paid",
                                     help="Leave 0 if not paid yet")
-
         f_paid_date = None
         if f_paid > 0:
             f_paid_date = st.date_input("Payment Date", value=datetime.now().date(), key="f_paid_date")
 
-        # Validation feedback live
-        errors = []
+        # Live validation
         if f_amount > 0 and f_paid > f_amount:
-            errors.append("Paid amount cannot exceed invoice amount.")
+            st.markdown('<div style="color:#FF3860;font-size:11px;">&#9888; Paid cannot exceed invoice amount.</div>',unsafe_allow_html=True)
         if f_due_date < f_inv_date:
-            errors.append("Due date cannot be before invoice date.")
-
-        for e in errors:
-            st.markdown(
-                '<div style="color:#FF3860;font-size:11px;margin-top:4px;">&#9888; '+e+'</div>',
-                unsafe_allow_html=True)
+            st.markdown('<div style="color:#FF3860;font-size:11px;">&#9888; Due date before invoice date.</div>',unsafe_allow_html=True)
 
         if st.button("💾 Save Invoice", use_container_width=True, key="save_manual_invoice"):
-            # Full validation on submit
-            save_errors = []
-            if not f_cust.strip():
-                save_errors.append("Customer name is required.")
-            if not f_inv.strip():
-                save_errors.append("Invoice number is required.")
-            if f_amount <= 0:
-                save_errors.append("Amount must be greater than 0.")
-            if f_paid > f_amount:
-                save_errors.append("Paid amount cannot exceed invoice amount.")
-            if f_due_date < f_inv_date:
-                save_errors.append("Due date cannot be before invoice date.")
+            errs = []
+            if not f_cust.strip():    errs.append("Customer name required.")
+            if not f_inv.strip():     errs.append("Invoice number required.")
+            if f_amount <= 0:         errs.append("Amount must be greater than 0.")
+            if f_paid > f_amount:     errs.append("Paid cannot exceed amount.")
+            if f_due_date < f_inv_date: errs.append("Due date before invoice date.")
 
-            if save_errors:
-                for e in save_errors:
-                    st.error(e)
+            if errs:
+                for e in errs: st.error(e)
             else:
-                # Build single-row DataFrame
                 new_row = pd.DataFrame([{
                     "customer_name": f_cust.strip(),
                     "invoice_no":    f_inv.strip().upper(),
@@ -672,19 +679,19 @@ with st.sidebar:
                     "due_date":      pd.Timestamp(f_due_date),
                     "amount":        float(f_amount),
                     "paid_amount":   float(f_paid),
-                    "payment_date":  pd.Timestamp(f_paid_date) if f_paid_date and f_paid > 0 else pd.NaT,
+                    "payment_date":  pd.Timestamp(f_paid_date) if f_paid_date and f_paid>0 else pd.NaT,
                 }])
-
-                # Save to history and reprocess dashboard
-                full, new_count, dupes = save_history(bid, new_row)
-                inv, summ, age = process_all(full, today)
-                st.session_state["df_raw"]        = full
-                st.session_state["df_inv"]        = inv
-                st.session_state["summary"]       = summ
-                st.session_state["ageing"]        = age
-                st.session_state["today_cached"]  = str(today)
-                st.session_state["form_success"]  = f_inv.strip().upper()
-                st.rerun()
+                with st.spinner("Saving..."):
+                    full, _, _ = save_history(bid, new_row)
+                    if len(full) > 0:
+                        inv, summ, age = process_all(full, today)
+                        st.session_state["df_raw"]       = full
+                        st.session_state["df_inv"]       = inv
+                        st.session_state["summary"]      = summ
+                        st.session_state["ageing"]       = age
+                        st.session_state["today_cached"] = str(today)
+                        st.session_state["form_success"] = f_inv.strip().upper()
+                        st.rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  INPUT
@@ -694,8 +701,8 @@ if st.session_state["summary"] is None:
     existing = load_history(bid)
 
     if len(existing)>0:
-        st.info("**History found** — {:,} invoice rows saved. Upload new data to update, or use saved history.".format(len(existing)))
-        if st.button("📂 Use Saved History"):
+        st.info("**History found** — {:,} invoice rows in database. Load to analyse.".format(len(existing)))
+        if st.button("📂 Load My Data"):
             inv,summ,age = process_all(existing, today)
             st.session_state.update({"df_raw":existing,"df_inv":inv,"summary":summ,
                                       "ageing":age,"today_cached":str(today)})
@@ -710,10 +717,10 @@ if st.session_state["summary"] is None:
 
     if uploaded:
         raw = pd.read_csv(uploaded) if uploaded.name.endswith(".csv") else pd.read_excel(uploaded)
-        with st.spinner("Saving and processing..."):
+        with st.spinner("Saving to database and processing..."):
             cleaned      = clean_data(raw)
             full,new,dup = save_history(bid, cleaned)
-            st.success("{} new rows added · {} updated · {:,} total history rows.".format(new,dup,len(full)))
+            st.success("{} invoices saved to database. Total: {:,} rows.".format(new, len(full)))
             inv,summ,age = process_all(full, today)
             st.session_state.update({"df_raw":full,"df_inv":inv,"summary":summ,
                                       "ageing":age,"today_cached":str(today)})
@@ -732,7 +739,7 @@ if st.session_state["summary"] is None:
             '<div style="text-align:center;padding:60px 20px;">'
             '<div style="font-size:52px;margin-bottom:16px">&#128194;</div>'
             '<div style="font-size:20px;font-weight:600;color:#8899AA;margin-bottom:8px">No data yet</div>'
-            '<div style="font-size:13px;color:#4A5568">Upload a CSV / Excel or click Use Example Data.</div>'
+            '<div style="font-size:13px;color:#4A5568">Upload a file, use example data, or add invoices manually from the sidebar.</div>'
             '</div>', unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -745,16 +752,15 @@ else:
 
     stepper(3)
 
-    # KPIs
     k1,k2,k3,k4,k5 = st.columns(5)
     k1.metric("Customers",    str(len(summary)))
     k2.metric("Total Credit", fmt(summary["Total Credit"].sum()))
     k3.metric("Total Paid",   fmt(summary["Total Paid"].sum()))
     k4.metric("Outstanding",  fmt(summary["Outstanding"].sum()))
-    k5.metric("Critical (D)", str(int((summary["Risk Grade"]=="D").sum())), delta="Immediate action needed", delta_color="inverse")
+    k5.metric("Critical (D)", str(int((summary["Risk Grade"]=="D").sum())),
+              delta="Immediate action needed", delta_color="inverse")
     st.markdown("<div style='height:16px'/>",unsafe_allow_html=True)
 
-    # Charts
     ch1,ch2 = st.columns([1,2])
     with ch1:
         st.markdown("**Risk Grade Breakdown**")
@@ -808,7 +814,6 @@ else:
         "🧾 Invoice Detail","📁 History",
     ])
 
-    # ── Risk Analysis ──────────────────────────────────────────────────────────
     with tab_risk:
         disp = filtered[["Customer","Invoices","Risk Score","Risk Grade","Grade Label",
                           "Total Credit","Total Paid","Outstanding","Max Overdue(d)",
@@ -831,10 +836,9 @@ else:
             ageing.to_excel(w, sheet_name="Ageing Report",index=False)
         st.download_button("⬇ Download Full Excel Report",out.getvalue(),"credit_risk_report.xlsx")
 
-    # ── Behaviour Predictor ────────────────────────────────────────────────────
     with tab_beh:
         st.markdown("### 🔮 Payment Behaviour Predictor")
-        st.caption("Analyses full invoice history per customer. More history = more accurate predictions.")
+        st.caption("Analyses full invoice history. More history = more accurate predictions.")
         tc1,tc2,tc3,tc4 = st.columns(4)
         tc = filtered["Behaviour Trend"].value_counts()
         tc1.metric("Improving",      str(tc.get("Improving",0)), delta="Good trend")
@@ -858,7 +862,6 @@ else:
                 '<span style="font-size:11px;color:#8899AA">Outstanding: <b style="color:'+m["color"]+'">'+fmt(row["Outstanding"])+'</b></span>'
                 '</div></div>', unsafe_allow_html=True)
 
-    # ── Call Table ─────────────────────────────────────────────────────────────
     with tab_call:
         cd = filtered[["Customer","Risk Grade","Outstanding","Max Overdue(d)","Call Type","Credit Action","Call Script"]].copy()
         cd.insert(0,"Priority",range(1,len(cd)+1))
@@ -884,7 +887,6 @@ else:
         ce["Outstanding"] = ce["Outstanding"].apply(fmt)
         st.download_button("⬇ Export Call List",ce.to_csv(index=False),"call_list.csv")
 
-    # ── Ageing ─────────────────────────────────────────────────────────────────
     with tab_age:
         st.markdown("### Ageing Report")
         st.caption("FMCG India buckets: Current / 1-15 / 16-30 / 31-45 / 45+ days")
@@ -908,7 +910,6 @@ else:
         st.plotly_chart(fig_age,use_container_width=True)
         st.download_button("⬇ Export Ageing Report",ageing.to_csv(index=False),"ageing_report.csv")
 
-    # ── Invoice Detail ─────────────────────────────────────────────────────────
     with tab_inv:
         st.markdown("### Customer Invoice Detail")
         sel      = st.selectbox("Select Customer",summary["Customer"].tolist(),key="inv_cust")
@@ -929,7 +930,7 @@ else:
             '<div style="background:rgba(255,56,96,0.25);border-radius:6px;height:8px;">'
             '<div style="width:'+str(paid_pct)+'%;background:#00E5A0;height:8px;border-radius:6px;"></div>'
             '</div></div>', unsafe_allow_html=True)
-        trend  = cust_row["Behaviour Trend"]
+        trend = cust_row["Behaviour Trend"]
         tc_clr = "#00E5A0" if trend=="Improving" else "#FF3860" if trend=="Worsening" else "#FFD166" if trend=="Stable" else "#8899AA"
         st.markdown(
             '<div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);'
@@ -948,20 +949,20 @@ else:
             })
         st.download_button("⬇ Export {}'s Invoices".format(sel),cust_inv.to_csv(index=False),"{}_invoices.csv".format(sel.replace(" ","_")))
 
-    # ── History ────────────────────────────────────────────────────────────────
     with tab_hist:
         st.markdown("### 📁 My Invoice History")
+        st.caption("All your invoice data stored permanently in Supabase database.")
         hist_df = load_history(bid)
         if len(hist_df)==0:
-            st.info("No history saved yet.")
+            st.info("No history yet. Upload invoices or add manually from the sidebar.")
         else:
             h1,h2,h3 = st.columns(3)
             h1.metric("Total Invoice Rows", "{:,}".format(len(hist_df)))
-            h2.metric("Unique Customers",   str(hist_df["customer_name"].nunique()))
-            earliest = pd.to_datetime(hist_df["invoice_date"],errors="coerce").min()
-            h3.metric("Earliest Invoice",   str(earliest.date()) if pd.notna(earliest) else "—")
+            h2.metric("Unique Customers",   str(hist_df["customer_name"].nunique()) if "customer_name" in hist_df.columns else "—")
+            earliest = pd.to_datetime(hist_df["invoice_date"],errors="coerce").min() if "invoice_date" in hist_df.columns else None
+            h3.metric("Earliest Invoice",   str(earliest.date()) if earliest and pd.notna(earliest) else "—")
             with st.expander("Preview first 50 rows"):
                 st.dataframe(hist_df.head(50),use_container_width=True,hide_index=True)
-            st.download_button("⬇ Download Full History",hist_df.to_csv(index=False),"history_{}.csv".format(safe_bid(bid)))
+            st.download_button("⬇ Download Full History",hist_df.to_csv(index=False),"history_{}.csv".format(bid))
             st.markdown("---")
-            st.caption("To delete your history, contact your service provider.")
+            st.caption("To delete history, contact your service provider.")
