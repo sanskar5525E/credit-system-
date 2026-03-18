@@ -877,13 +877,32 @@ else:
 
     stepper(3)
 
+    # ── KPI Cards — custom HTML so numbers never truncate ─────────────────────
+    total_credit  = summary["Total Credit"].sum()
+    total_paid    = summary["Total Paid"].sum()
+    total_out     = summary["Outstanding"].sum()
+    critical_cnt  = int((summary["Risk Grade"]=="D").sum())
+    cust_cnt      = len(summary)
+
+    def kpi_card(label, value, color="#F0F4F8", sub=None):
+        sub_html = '<div style="font-size:11px;color:#FF3860;margin-top:4px;">'+sub+'</div>' if sub else ''
+        return (
+            '<div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);'
+            'border-radius:14px;padding:16px 18px;">'
+            '<div style="font-size:11px;color:#8899AA;letter-spacing:0.08em;'
+            'text-transform:uppercase;margin-bottom:8px;">'+label+'</div>'
+            '<div style="font-family:\'DM Mono\',monospace;font-size:clamp(13px,1.6vw,20px);'
+            'font-weight:700;color:'+color+';word-break:break-word;line-height:1.3;">'+value+'</div>'
+            +sub_html+
+            '</div>'
+        )
+
     k1,k2,k3,k4,k5 = st.columns(5)
-    k1.metric("Customers",    str(len(summary)))
-    k2.metric("Total Credit", fmt(summary["Total Credit"].sum()))
-    k3.metric("Total Paid",   fmt(summary["Total Paid"].sum()))
-    k4.metric("Outstanding",  fmt(summary["Outstanding"].sum()))
-    k5.metric("Critical (D)", str(int((summary["Risk Grade"]=="D").sum())),
-              delta="Immediate action needed", delta_color="inverse")
+    k1.markdown(kpi_card("Customers", str(cust_cnt)), unsafe_allow_html=True)
+    k2.markdown(kpi_card("Total Credit", fmt_full(total_credit), "#5B9EF4"), unsafe_allow_html=True)
+    k3.markdown(kpi_card("Total Paid", fmt_full(total_paid), "#00E5A0"), unsafe_allow_html=True)
+    k4.markdown(kpi_card("Outstanding", fmt_full(total_out), "#FFD166"), unsafe_allow_html=True)
+    k5.markdown(kpi_card("Critical (D)", str(critical_cnt), "#FF3860", "⚠ Immediate action needed"), unsafe_allow_html=True)
     st.markdown("<div style='height:16px'/>",unsafe_allow_html=True)
 
     ch1,ch2 = st.columns([1,2])
