@@ -55,10 +55,10 @@ GRADE_META = {
     "D":{"color":"#FF3860","rgba":"255,56,96",   "label":"Critical Risk", "action":"Suspend Credit",   "call":"Urgent Collection Call", "limit_mult":0.0},
 }
 CALL_SCRIPTS = {
-    "A":"Hello {name}, we are calling to thank you for your outstanding payment record. As a valued customer, we are pleased to offer you an increased credit facility.",
-    "B":"Hello {name}, this is a friendly check-in call. We noticed a few minor payment delays and want to ensure everything is running smoothly on your end.",
-    "C":"Hello {name}, we are following up on overdue invoices totalling {amount}. We need to discuss an immediate payment arrangement to keep your account active.",
-    "D":"Hello {name}, this is an urgent notice. Outstanding dues of {amount} have been flagged for suspension. Immediate payment is required to avoid legal escalation.",
+    "A":"Bhai {name}, aapka payment record bahut accha hai. Aapke liye hum credit limit badha rahe hain. Thank you for always paying on time!",
+    "B":"Hello {name} bhai, bas ek friendly call tha. Kuch invoices thoda late ho rahe hain — koi problem hai toh batao, hum mil ke sort kar lete hain.",
+    "C":"Hello {name} bhai, aapke {amount} ke invoices overdue hain. Kab tak payment ho sakti hai? Batao toh hum account active rakh sakte hain.",
+    "D":"Hello {name} bhai, urgent baat karni thi. {amount} bahut time se pending hai. Aaj payment nahi hua toh hume supply band karni padegi. Please abhi baat karo.",
 }
 OVERDUE_CAP  = 45
 # ── Developer password loaded from Streamlit secrets ──
@@ -252,19 +252,34 @@ def save_history(bid, df_new):
 #  UI HELPERS
 # ══════════════════════════════════════════════════════════════════════════════
 def fmt(x):
-    """Format in Indian number system — lakhs for large numbers."""
+    """Short Indian format for KPIs — lakhs and crores."""
     try:
         v = float(x)
-        if v >= 10_000_000:  return "Rs.{:.1f}Cr".format(v/10_000_000)
-        elif v >= 100_000:   return "Rs.{:.1f}L".format(v/100_000)
-        elif v >= 1_000:     return "Rs.{:.0f}K".format(v/1_000)
-        else:                return "Rs.{:.0f}".format(v)
-    except: return "Rs.0"
+        if v >= 10_000_000: return "₹{:.2f} Cr".format(v / 10_000_000)
+        elif v >= 100_000:  return "₹{:.2f} L".format(v / 100_000)
+        elif v >= 1_000:    return "₹{:.1f}K".format(v / 1_000)
+        else:               return "₹{:.0f}".format(v)
+    except: return "₹0"
 
 def fmt_full(x):
-    """Full format with commas — for tables."""
-    try:    return "Rs.{:,.0f}".format(float(x))
-    except: return "Rs.0"
+    """Full Indian number format with commas — for tables."""
+    try:
+        v = int(float(x))
+        # Indian comma system: 12,34,567
+        s = str(v)
+        if len(s) <= 3:
+            return "₹" + s
+        last3 = s[-3:]
+        rest  = s[:-3]
+        parts = []
+        while len(rest) > 2:
+            parts.append(rest[-2:])
+            rest = rest[:-2]
+        if rest:
+            parts.append(rest)
+        parts.reverse()
+        return "₹" + ",".join(parts) + "," + last3
+    except: return "₹0"
 
 def card_html(gk, cnt):
     m = GRADE_META[gk]
