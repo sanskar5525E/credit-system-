@@ -923,24 +923,69 @@ else:
 
     with ch2:
         st.markdown("**Outstanding Amount by Customer**")
-        bar_df = summary[["Customer","Outstanding","Risk Grade"]].copy().sort_values("Outstanding",ascending=True)
-        fig    = go.Figure()
-        for gk in ["A","B","C","D"]:
-            sub = bar_df[bar_df["Risk Grade"]==gk]
-            if len(sub)==0: continue
-            fig.add_trace(go.Bar(x=sub["Outstanding"],y=sub["Customer"],orientation="h",
-                name="Grade "+gk, marker_color=GRADE_META[gk]["color"],
-                text=sub["Outstanding"].apply(lambda v:"Rs.{:,.0f}".format(v)),
-                textposition="outside",textfont=dict(size=10,color="#C8D8E8")))
-        fig.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",
-            font_color="#C8D8E8",barmode="overlay",
-            legend=dict(font=dict(color="#C8D8E8"),orientation="h",y=-0.08),
-            margin=dict(t=10,b=50,l=10,r=110),
-            height=max(300,len(bar_df)*28+60),
-            xaxis=dict(gridcolor="rgba(255,255,255,0.05)",tickformat=",.0f",title=""),
-            yaxis=dict(gridcolor="rgba(0,0,0,0)",title="",automargin=True,tickfont=dict(size=11)))
-        st.plotly_chart(fig,use_container_width=True)
+
+        # Only show customers who actually have outstanding > 0
+        bar_df = summary[summary["Outstanding"] > 0][["Customer","Outstanding","Risk Grade"]]\
+                 .copy().sort_values("Outstanding", ascending=True)
+
+        if len(bar_df) == 0:
+            st.markdown(
+                '<div style="background:rgba(0,229,160,0.06);border:1px solid rgba(0,229,160,0.2);'
+                'border-radius:12px;padding:32px;text-align:center;">'
+                '<div style="font-size:28px;margin-bottom:8px">🎉</div>'
+                '<div style="color:#00E5A0;font-weight:700;font-size:15px">All customers are fully paid!</div>'
+                '<div style="color:#8899AA;font-size:12px;margin-top:4px">No outstanding amounts.</div>'
+                '</div>', unsafe_allow_html=True)
+        else:
+            # Color each bar by risk grade
+            bar_colors = [GRADE_META[g]["color"] for g in bar_df["Risk Grade"]]
+            # Format labels
+            bar_labels = [fmt_full(v) for v in bar_df["Outstanding"]]
+
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                x=bar_df["Outstanding"],
+                y=bar_df["Customer"],
+                orientation="h",
+                marker=dict(
+                    color=bar_colors,
+                    line=dict(width=0),
+                    opacity=0.9,
+                ),
+                text=bar_labels,
+                textposition="outside",
+                textfont=dict(size=11, color="#C8D8E8", family="DM Mono"),
+                hovertemplate="<b>%{y}</b><br>Outstanding: %{text}<br>Grade: %{customdata}<extra></extra>",
+                customdata=bar_df["Risk Grade"],
+            ))
+
+            # Add colored grade badges as shapes
+            chart_height = max(280, len(bar_df) * 42 + 60)
+
+            fig.update_layout(
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                font_color="#C8D8E8",
+                margin=dict(t=10, b=20, l=10, r=140),
+                height=chart_height,
+                bargap=0.35,
+                xaxis=dict(
+                    gridcolor="rgba(255,255,255,0.04)",
+                    tickformat=",.0f",
+                    title="",
+                    tickfont=dict(size=10),
+                    showline=False,
+                    zeroline=False,
+                ),
+                yaxis=dict(
+                    gridcolor="rgba(0,0,0,0)",
+                    title="",
+                    automargin=True,
+                    tickfont=dict(size=12, family="Inter"),
+                ),
+                showlegend=False,
+            )
+            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
     st.markdown("---")
     rc = st.columns(4)
