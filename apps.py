@@ -27,7 +27,7 @@ section[data-testid="stSidebar"]{background:#0D1B2A !important;border-right:1px 
 section[data-testid="stSidebar"] *{color:#C8D8E8 !important;}
 [data-testid="metric-container"]{background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:14px;padding:16px 20px;}
 [data-testid="metric-container"] label{color:#8899AA !important;font-size:11px !important;letter-spacing:0.08em;text-transform:uppercase;}
-[data-testid="metric-container"] [data-testid="stMetricValue"]{color:#F0F4F8 !important;font-family:'DM Mono',monospace !important;font-size:20px !important;}
+[data-testid="metric-container"] [data-testid="stMetricValue"]{color:#F0F4F8 !important;font-family:'DM Mono',monospace !important;font-size:clamp(13px,1.4vw,18px) !important;white-space:normal !important;word-break:break-all !important;overflow:visible !important;}
 .stButton>button{background:linear-gradient(135deg,#5B9EF4,#4A7EC4) !important;border:none !important;color:white !important;border-radius:10px !important;font-weight:600 !important;padding:10px 24px !important;}
 [data-testid="stDataFrame"]{border-radius:12px;overflow:hidden;}
 .stTabs [data-baseweb="tab-list"]{background:rgba(255,255,255,0.03);border-radius:10px;padding:4px;gap:4px;}
@@ -252,6 +252,17 @@ def save_history(bid, df_new):
 #  UI HELPERS
 # ══════════════════════════════════════════════════════════════════════════════
 def fmt(x):
+    """Format in Indian number system — lakhs for large numbers."""
+    try:
+        v = float(x)
+        if v >= 10_000_000:  return "Rs.{:.1f}Cr".format(v/10_000_000)
+        elif v >= 100_000:   return "Rs.{:.1f}L".format(v/100_000)
+        elif v >= 1_000:     return "Rs.{:.0f}K".format(v/1_000)
+        else:                return "Rs.{:.0f}".format(v)
+    except: return "Rs.0"
+
+def fmt_full(x):
+    """Full format with commas — for tables."""
     try:    return "Rs.{:,.0f}".format(float(x))
     except: return "Rs.0"
 
@@ -346,23 +357,55 @@ def calc_metrics(df, today):
     mask_late = df["fully_paid"]&df["payment_date"].notna()&(df["payment_date"]>df["due_date"])
     df.loc[mask_late,"overdue_days"] = (df.loc[mask_late,"payment_date"]-df.loc[mask_late,"due_date"]).dt.days.astype(int)
     df.loc[mask_late,"paid_late"] = True
-    df["overdue_days"] = df["overdue_days"].clip(lower=0,upper=180)
+    df["overdue_days"] = df["overdue_days"].clip(lower=0,upper=60)
     return df
 
 def predict_behaviour(inv_df):
+    """
+    Improved behaviour predictor.
+    Uses 3 signals:
+    1. Trend — are delays getting better or worse over time?
+    2. Recent vs overall — last 3 invoices vs lifetime average
+    3. Payment rate — what % of invoices are fully paid?
+    Needs min 3 paid invoices for a prediction.
+    """
     paid = inv_df[inv_df["fully_paid"]==True].copy().sort_values("invoice_date")
-    if len(paid)<3:
-        return "New",0,"Not enough history to predict payment behaviour."
-    mid     = len(paid)//2
-    delta   = paid.iloc[mid:]["overdue_days"].mean() - paid.iloc[:mid]["overdue_days"].mean()
+    total_inv = len(inv_df)
+    paid_count = len(paid)
+
+    # Not enough data
+    if paid_count < 3:
+        if total_inv == 0:
+            return "New", 0, "No invoice history yet."
+        unpaid_pct = round(((total_inv - paid_count) / total_inv) * 100)
+        return "New", 0, "Only {} paid invoice(s). Need 3+ to predict. {}% invoices unpaid.".format(paid_count, unpaid_pct)
+
+    mid     = len(paid) // 2
+    first_half_avg = paid.iloc[:mid]["overdue_days"].mean()
+    second_half_avg = paid.iloc[mid:]["overdue_days"].mean()
+    delta   = second_half_avg - first_half_avg
     last3   = paid.tail(3)["overdue_days"].mean()
     overall = paid["overdue_days"].mean()
-    if delta>5 or last3>overall*1.3:
-        return "Worsening",round(last3,1),"Likely to delay next payment by {:.0f}+ days. Reduce credit limit proactively.".format(max(last3,paid.iloc[mid:]["overdue_days"].mean()))
-    elif delta<-5 or last3<overall*0.7:
-        return "Improving",round(last3,1),"Payment behaviour improving. Average delay reduced to {:.0f} days recently.".format(last3)
+
+    # Payment rate signal
+    pay_rate = paid_count / total_inv if total_inv > 0 else 0
+
+    # Worsening: delays increasing AND/OR last 3 worse than average
+    if (delta > 5 and last3 > overall) or last3 > overall * 1.3:
+        msg = "Payment delays increasing. Last 3 invoices averaged {:.0f} days late vs {:.0f} days overall.".format(last3, overall)
+        if pay_rate < 0.6:
+            msg += " Only {:.0f}% invoices fully paid — high default risk.".format(pay_rate * 100)
+        return "Worsening", round(last3, 1), msg
+
+    # Improving: delays decreasing AND last 3 better than average
+    elif (delta < -5 and last3 < overall) or last3 < overall * 0.7:
+        msg = "Payment behaviour improving. Last 3 invoices averaged {:.0f} days late vs {:.0f} days overall.".format(last3, overall)
+        return "Improving", round(last3, 1), msg
+
+    # Stable
     else:
-        return "Stable",round(last3,1),"Consistent payment pattern. Average delay is {:.0f} days.".format(overall)
+        msg = "Consistent payment pattern. Average delay {:.0f} days. Pay rate {:.0f}%.".format(overall, pay_rate * 100)
+        return "Stable", round(last3, 1), msg
 
 def calc_ageing(df):
     df = df[df["outstanding"]>0].copy()
@@ -901,7 +944,7 @@ else:
                           "Total Credit","Total Paid","Outstanding","Max Overdue(d)",
                           "Avg Delay(d)","Suggested Limit","Credit Action","Behaviour Trend"]].copy()
         for c in ["Total Credit","Total Paid","Outstanding","Suggested Limit"]:
-            disp[c] = disp[c].apply(fmt)
+            disp[c] = disp[c].apply(fmt_full)
         st.dataframe(disp,use_container_width=True,hide_index=True,
             column_config={
                 "Risk Score":      st.column_config.ProgressColumn("Score",min_value=0,max_value=100,format="%d"),
@@ -947,7 +990,7 @@ else:
     with tab_call:
         cd = filtered[["Customer","Risk Grade","Outstanding","Max Overdue(d)","Call Type","Credit Action","Call Script"]].copy()
         cd.insert(0,"Priority",range(1,len(cd)+1))
-        cd["Outstanding"]    = cd["Outstanding"].apply(fmt)
+        cd["Outstanding"]    = cd["Outstanding"].apply(fmt_full)
         cd["Max Overdue(d)"] = cd["Max Overdue(d)"].apply(lambda x:"{} days".format(int(x)) if x>0 else "On time")
         st.dataframe(cd,use_container_width=True,hide_index=True,
             column_config={
@@ -996,7 +1039,7 @@ else:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
         ce = filtered[["Customer","Risk Grade","Outstanding","Max Overdue(d)","Call Type","Credit Action"]].copy()
-        ce["Outstanding"] = ce["Outstanding"].apply(fmt)
+        ce["Outstanding"] = ce["Outstanding"].apply(fmt_full)
         st.download_button("⬇ Export Call List",ce.to_csv(index=False),"call_list.csv")
 
     with tab_age:
@@ -1004,7 +1047,7 @@ else:
         st.caption("FMCG India buckets: Current / 1-15 / 16-30 / 31-45 / 45+ days")
         ad = ageing.copy()
         for c in ["Current","1-15 days","16-30 days","31-45 days","45+ days","Total Outstanding"]:
-            if c in ad.columns: ad[c]=ad[c].apply(fmt)
+            if c in ad.columns: ad[c]=ad[c].apply(fmt_full)
         ad.rename(columns={"customer_name":"Customer"},inplace=True)
         st.dataframe(ad,use_container_width=True,hide_index=True)
         buckets = ["Current","1-15 days","16-30 days","31-45 days","45+ days"]
@@ -1052,7 +1095,7 @@ else:
             unsafe_allow_html=True)
         id_ = cust_inv[["invoice_no","invoice_date","due_date","amount","paid_amount","outstanding","overdue_days","paid_late","fully_paid"]].copy()
         id_.columns = ["Invoice","Invoice Date","Due Date","Amount","Paid","Outstanding","Overdue(d)","Paid Late","Fully Paid"]
-        for c in ["Amount","Paid","Outstanding"]: id_[c]=id_[c].apply(fmt)
+        for c in ["Amount","Paid","Outstanding"]: id_[c]=id_[c].apply(fmt_full)
         st.dataframe(id_,use_container_width=True,hide_index=True,
             column_config={
                 "Overdue(d)": st.column_config.NumberColumn("Overdue",format="%d days"),
