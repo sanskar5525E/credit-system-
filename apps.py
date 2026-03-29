@@ -17,7 +17,7 @@ st.set_page_config(
 )
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  CSS — Mobile First + PWA + Auto Theme
+#  CSS — Mobile First + Auto Theme + Fixed Bottom Nav
 # ══════════════════════════════════════════════════════════════════════════════
 st.markdown("""
 <style>
@@ -53,22 +53,23 @@ st.markdown("""
 }
 
 /* ── Base ── */
-html,body,[class*="css"]{font-family:'Inter',sans-serif;-webkit-tap-highlight-color:transparent;}
+html,body,[class*="css"]{font-family:'Inter',sans-serif;-webkit-tap-highlight-color:transparent;box-sizing:border-box;}
 .stApp{background:var(--bg);color:var(--text);}
 header[data-testid="stHeader"]{display:none!important;}
 section[data-testid="stSidebar"]{display:none!important;}
 .block-container{padding:0 0 80px 0!important;max-width:100%!important;}
 footer{display:none!important;}
 
-/* ── PWA Meta ── */
-
-/* ── Top Bar ── */
+/* ════════════════════════════════════════════════════════════════════════════
+   TOP BAR — fixed at top
+   ════════════════════════════════════════════════════════════════════════════ */
 .cp-topbar{
   position:fixed;top:0;left:0;right:0;z-index:100;
   background:var(--bg);border-bottom:1px solid var(--border);
   padding:12px 16px;
   display:flex;align-items:center;justify-content:space-between;
   backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
+  height:48px;
 }
 .cp-logo{
   font-weight:800;font-size:20px;
@@ -78,29 +79,41 @@ footer{display:none!important;}
 }
 .cp-user{font-size:12px;color:var(--muted);font-weight:500;}
 
-/* ── Bottom Nav ── */
+/* ════════════════════════════════════════════════════════════════════════════
+   BOTTOM NAVIGATION — proper fixed HTML nav (not Streamlit buttons)
+   ════════════════════════════════════════════════════════════════════════════ */
 .cp-nav{
   position:fixed;bottom:0;left:0;right:0;z-index:100;
   background:var(--bg);border-top:1px solid var(--border);
   display:grid;grid-template-columns:repeat(5,1fr);
-  padding:8px 0 env(safe-area-inset-bottom,8px);
+  padding:4px 0;
+  padding-bottom:max(4px, env(safe-area-inset-bottom));
   backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
+  height:auto;
 }
 .cp-nav-item{
-  display:flex;flex-direction:column;align-items:center;
-  gap:3px;padding:4px 0;cursor:pointer;
-  font-size:10px;color:var(--muted);font-weight:500;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:1px;padding:7px 0;cursor:pointer;
+  font-size:10px;color:var(--muted);font-weight:600;
   border:none;background:none;
-  transition:color 0.15s;
+  transition:color 0.15s ease;
   -webkit-tap-highlight-color:transparent;
+  touch-action:manipulation;user-select:none;
+  outline:none;
 }
+.cp-nav-item:hover{color:var(--text);}
 .cp-nav-item.active{color:var(--blue);}
+.cp-nav-item:active{opacity:0.7;}
 .cp-nav-icon{font-size:20px;line-height:1;}
 
-/* ── Page Content ── */
-.cp-page{padding:72px 16px 16px;}
+/* ════════════════════════════════════════════════════════════════════════════
+   PAGE CONTENT — enough padding for fixed topbar + bottom nav
+   ════════════════════════════════════════════════════════════════════════════ */
+.cp-page{padding:68px 16px 76px;}
 
-/* ── Cards ── */
+/* ════════════════════════════════════════════════════════════════════════════
+   CARDS
+   ════════════════════════════════════════════════════════════════════════════ */
 .cp-card{
   background:var(--card);
   border:1px solid var(--border);
@@ -117,7 +130,9 @@ footer{display:none!important;}
   margin-bottom:8px;
 }
 
-/* ── KPI Grid ── */
+/* ════════════════════════════════════════════════════════════════════════════
+   KPI GRID
+   ════════════════════════════════════════════════════════════════════════════ */
 .cp-kpi-grid{
   display:grid;
   grid-template-columns:1fr 1fr;
@@ -130,18 +145,23 @@ footer{display:none!important;}
   border-radius:14px;
   padding:14px;
   box-shadow:var(--shadow);
+  min-width:0;
 }
 .cp-kpi-label{font-size:11px;color:var(--muted);font-weight:500;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.05em;}
-.cp-kpi-value{font-family:'DM Mono',monospace;font-size:clamp(16px,4vw,22px);font-weight:700;color:var(--text);word-break:break-all;}
+.cp-kpi-value{font-family:'DM Mono',monospace;font-size:clamp(16px,4vw,22px);font-weight:700;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 
-/* ── Grade Badges ── */
+/* ════════════════════════════════════════════════════════════════════════════
+   GRADE BADGES
+   ════════════════════════════════════════════════════════════════════════════ */
 .grade-A{background:rgba(0,194,120,0.12);color:#00C278;border:1px solid rgba(0,194,120,0.25);}
 .grade-B{background:rgba(245,166,35,0.12);color:#F5A623;border:1px solid rgba(245,166,35,0.25);}
 .grade-C{background:rgba(237,137,54,0.12);color:#ED8936;border:1px solid rgba(237,137,54,0.25);}
 .grade-D{background:rgba(229,62,62,0.12);color:#E53E3E;border:1px solid rgba(229,62,62,0.25);}
 .cp-badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;font-family:'DM Mono',monospace;}
 
-/* ── Customer Row ── */
+/* ════════════════════════════════════════════════════════════════════════════
+   CUSTOMER ROW
+   ════════════════════════════════════════════════════════════════════════════ */
 .cp-cust-row{
   display:flex;align-items:center;justify-content:space-between;
   padding:14px 16px;
@@ -150,21 +170,16 @@ footer{display:none!important;}
   border-radius:14px;
   margin-bottom:8px;
   box-shadow:var(--shadow);
+  gap:12px;
 }
-.cp-cust-name{font-weight:700;font-size:14px;color:var(--text);margin-bottom:2px;}
+.cp-cust-name{font-weight:700;font-size:14px;color:var(--text);margin-bottom:2px;word-break:break-word;}
 .cp-cust-sub{font-size:12px;color:var(--muted);}
-.cp-cust-right{text-align:right;}
+.cp-cust-right{text-align:right;flex-shrink:0;}
 .cp-cust-amt{font-family:'DM Mono',monospace;font-weight:700;font-size:14px;}
 
-/* ── Call Card ── */
-.cp-call-card{
-  background:var(--card);
-  border:1px solid var(--border);
-  border-radius:16px;
-  padding:16px;
-  margin-bottom:12px;
-  box-shadow:var(--shadow);
-}
+/* ════════════════════════════════════════════════════════════════════════════
+   CALL CARD
+   ════════════════════════════════════════════════════════════════════════════ */
 .cp-call-script{
   background:var(--bg2);
   border-radius:10px;
@@ -173,60 +188,63 @@ footer{display:none!important;}
   color:var(--text);
   line-height:1.7;
   margin:10px 0;
-}
-.cp-priority{
-  display:inline-flex;align-items:center;gap:4px;
-  font-size:11px;font-weight:700;padding:3px 10px;
-  border-radius:20px;margin-bottom:8px;
+  word-break:break-word;
 }
 
-/* ── Progress Bar ── */
+/* ════════════════════════════════════════════════════════════════════════════
+   PROGRESS BAR
+   ════════════════════════════════════════════════════════════════════════════ */
 .cp-progress-wrap{background:var(--bg3);border-radius:6px;height:6px;margin-top:6px;}
 .cp-progress-fill{height:6px;border-radius:6px;transition:width 0.5s ease;}
 
-/* ── Predict Card ── */
-.cp-predict{
-  border-radius:14px;
-  padding:14px 16px;
-  margin-bottom:10px;
-  border:1px solid var(--border);
-}
+/* ════════════════════════════════════════════════════════════════════════════
+   SECTION HEADER
+   ════════════════════════════════════════════════════════════════════════════ */
+.cp-section-header{font-size:13px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.08em;margin:20px 0 10px;}
 
-/* ── Section Header ── */
-.cp-section-header{
-  font-size:13px;font-weight:700;color:var(--muted);
-  text-transform:uppercase;letter-spacing:0.08em;
-  margin:20px 0 10px;
-}
+/* ════════════════════════════════════════════════════════════════════════════
+   STREAMLIT WIDGET STYLING
+   ════════════════════════════════════════════════════════════════════════════ */
 
-/* ── Action Button ── */
-.stButton>button{
+/* ── Primary Action Buttons (Login, Save, Logout, etc.) ── */
+.stButton > button {
   background:linear-gradient(135deg,var(--blue),#2E7DD4)!important;
   border:none!important;color:white!important;
   border-radius:12px!important;font-weight:700!important;
   padding:12px 20px!important;width:100%!important;
   font-size:14px!important;letter-spacing:-0.01em!important;
+  cursor:pointer!important;
+  transition:opacity 0.15s!important;
+  box-shadow:0 2px 8px rgba(61,142,240,0.3)!important;
 }
-.stDownloadButton>button{
+.stButton > button:hover {opacity:0.9!important;}
+.stButton > button:active {opacity:0.8!important;}
+
+/* ── Download Buttons — secondary style ── */
+.stDownloadButton > button {
   background:var(--bg2)!important;
   border:1px solid var(--border)!important;
   color:var(--text)!important;
   border-radius:12px!important;font-weight:600!important;
   padding:10px 16px!important;width:100%!important;
+  font-size:13px!important;cursor:pointer!important;
 }
 
 /* ── Inputs ── */
-.stTextInput>div>div>input,.stSelectbox>div>div{
+.stTextInput > div > div > input,
+.stSelectbox > div > div {
   background:var(--bg2)!important;
   border:1px solid var(--border)!important;
   border-radius:10px!important;color:var(--text)!important;
   font-size:14px!important;
 }
-.stNumberInput>div>div>input{
+.stNumberInput > div > div > input,
+.stDateInput > div > div > input {
   background:var(--bg2)!important;
   border:1px solid var(--border)!important;
   border-radius:10px!important;color:var(--text)!important;
 }
+.stRadio > label{color:var(--text)!important;}
 
 /* ── Alerts ── */
 .stSuccess{background:rgba(0,194,120,0.08)!important;border:1px solid rgba(0,194,120,0.25)!important;border-radius:12px!important;}
@@ -243,20 +261,57 @@ footer{display:none!important;}
   font-weight:600!important;font-size:13px!important;
 }
 
-/* ── Desktop adjustments ── */
-@media (min-width:768px){
-  .block-container{padding:0 48px 80px!important;max-width:900px!important;margin:0 auto!important;}
-  .cp-page{padding:80px 0 16px;}
-  .cp-kpi-grid{grid-template-columns:repeat(4,1fr);}
-  .cp-nav{max-width:900px;left:50%;transform:translateX(-50%);border-radius:20px 20px 0 0;}
-  .cp-topbar{max-width:900px;left:50%;transform:translateX(-50%);border-radius:0 0 16px 16px;}
+/* ════════════════════════════════════════════════════════════════════════════
+   DEV PANEL TABS — style properly (NOT hidden)
+   ════════════════════════════════════════════════════════════════════════════ */
+.stTabs [data-baseweb="tab-list"]{
+  gap:4px;background:var(--bg2);
+  border-radius:12px;padding:4px;margin-bottom:16px;
+}
+.stTabs [data-baseweb="tab"]{
+  border-radius:10px!important;
+  background:transparent!important;
+  color:var(--muted)!important;
+  font-weight:600!important;font-size:13px!important;
+  padding:8px 16px!important;
+}
+.stTabs [data-baseweb="tab"][aria-selected="true"]{
+  background:var(--card)!important;
+  color:var(--text)!important;
+  box-shadow:0 1px 4px rgba(0,0,0,0.08)!important;
+}
+.stTabs [data-baseweb="tab-highlight"],
+.stTabs [data-baseweb="tab-border"]{
+  display:none!important;
 }
 
-/* ── Tab workaround — hide Streamlit tabs, use custom nav ── */
-.stTabs{display:none!important;}
+/* ════════════════════════════════════════════════════════════════════════════
+   DESKTOP ADJUSTMENTS (≥768px)
+   ════════════════════════════════════════════════════════════════════════════ */
+@media (min-width:768px){
+  .block-container{padding:0 48px 80px!important;max-width:900px!important;margin:0 auto!important;}
+  .cp-page{padding:76px 0 76px;}
+  .cp-kpi-grid{grid-template-columns:repeat(4,1fr);}
+
+  /* Center topbar and nav at same max-width as content */
+  .cp-topbar{
+    max-width:900px;left:50%;right:auto;
+    transform:translateX(-50%);
+    border-radius:0 0 16px 16px;
+  }
+  .cp-nav{
+    max-width:900px;left:50%;right:auto;
+    transform:translateX(-50%);
+    border-radius:16px 16px 0 0;
+  }
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   PWA META
+   ════════════════════════════════════════════════════════════════════════════ */
 </style>
 
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -469,7 +524,34 @@ def process_all(raw_df, today):
     return i, aggregate(i)
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  SESSION STATE
+#  BOTTOM NAV RENDERER — pure HTML/JS, no Streamlit buttons
+# ══════════════════════════════════════════════════════════════════════════════
+def render_nav(current_page):
+    items = [
+        ("home",    "🏠", "Home"),
+        ("risk",    "⚠️", "Risk"),
+        ("calls",   "📞", "Calls"),
+        ("predict", "🔮", "Predict"),
+        ("add",     "➕", "Add"),
+    ]
+    buttons = ""
+    for pg, icon, label in items:
+        active = " active" if current_page == pg else ""
+        buttons += '<button class="cp-nav-item{active}" onclick="navigateTo(\'{pg}\')"><span class="cp-nav-icon">{icon}</span><span>{label}</span></button>\n'.format(
+            active=active, pg=pg, icon=icon, label=label
+        )
+
+    return """<div class="cp-nav">{buttons}</div>
+<script>
+function navigateTo(page) {{
+    const url = new URL(window.location.href);
+    url.searchParams.set('cp_page', page);
+    window.location.href = url.toString();
+}}
+</script>""".format(buttons=buttons)
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  SESSION STATE — with URL param sync for navigation
 # ══════════════════════════════════════════════════════════════════════════════
 defaults = {
     "auth":False,"is_dev":False,"bid":None,"display_name":None,
@@ -477,6 +559,18 @@ defaults = {
 }
 for k,v in defaults.items():
     if k not in st.session_state: st.session_state[k]=v
+
+# Read navigation from URL params (works across page reloads / bookmarks)
+try:
+    qp = st.query_params
+    if "cp_page" in qp:
+        p = qp["cp_page"]
+        if isinstance(p, list):
+            p = p[0] if p else None
+        if p in ["home","risk","calls","predict","add"]:
+            st.session_state["page"] = p
+except Exception:
+    pass
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  LOGIN PAGE
@@ -497,7 +591,6 @@ if not st.session_state["auth"]:
     </div>
     """, unsafe_allow_html=True)
 
-    # Center the form
     _, col, _ = st.columns([1,3,1])
     with col:
         login_type = st.radio("Login as", ["Client","Developer"], horizontal=True, label_visibility="collapsed")
@@ -512,6 +605,12 @@ if not st.session_state["auth"]:
                     if ok:
                         st.session_state.update({"auth":True,"is_dev":False,
                             "bid":bid_in.strip().upper(),"display_name":result})
+                        # Only set URL param if not already set (preserves bookmarks)
+                        try:
+                            if "cp_page" not in st.query_params:
+                                st.query_params["cp_page"] = "home"
+                        except Exception:
+                            pass
                         st.rerun()
                     else: st.error(result)
                 else: st.warning("Enter both fields.")
@@ -532,6 +631,11 @@ if st.session_state["is_dev"]:
     st.markdown("### ⚙️ Developer Panel")
     if st.button("Logout"):
         for k,v in defaults.items(): st.session_state[k]=v
+        try:
+            if "cp_page" in st.query_params:
+                del st.query_params["cp_page"]
+        except Exception:
+            pass
         st.rerun()
 
     dev_t1, dev_t2, dev_t3 = st.tabs(["👥 Clients","➕ Add","📊 Overview"])
@@ -597,6 +701,7 @@ if st.session_state["is_dev"]:
 bid          = st.session_state["bid"]
 display_name = st.session_state["display_name"] or bid
 today        = pd.Timestamp(datetime.now().date())
+page         = st.session_state["page"]
 
 # Load data
 @st.cache_data(ttl=300, show_spinner=False)
@@ -615,46 +720,8 @@ st.markdown("""
 </div>
 """.format(display_name), unsafe_allow_html=True)
 
-# ── Bottom Nav ────────────────────────────────────────────────────────────────
-page = st.session_state["page"]
-
-nav_items = [
-    ("home",    "🏠", "Home"),
-    ("risk",    "⚠️", "Risk"),
-    ("calls",   "📞", "Calls"),
-    ("predict", "🔮", "Predict"),
-    ("add",     "➕", "Add"),
-]
-
-nav_cols = st.columns(5)
-for i, (pg, icon, label) in enumerate(nav_items):
-    with nav_cols[i]:
-        active_class = "active" if page == pg else ""
-        if st.button(icon + "\n" + label, key="nav_"+pg, use_container_width=True):
-            st.session_state["page"] = pg
-            st.rerun()
-
-# ── Inject styled bottom nav ──────────────────────────────────────────────────
-st.markdown("""
-<style>
-div[data-testid="column"] button {
-  background: transparent !important;
-  border: none !important;
-  color: var(--muted) !important;
-  font-size: 11px !important;
-  font-weight: 500 !important;
-  padding: 8px 4px !important;
-  border-radius: 10px !important;
-  box-shadow: none !important;
-  display: flex !important;
-  flex-direction: column !important;
-  align-items: center !important;
-  white-space: pre-line !important;
-  line-height: 1.4 !important;
-  width: 100% !important;
-}
-</style>
-""", unsafe_allow_html=True)
+# ── Bottom Nav (pure HTML + JS, not Streamlit buttons) ───────────────────────
+st.markdown(render_nav(page), unsafe_allow_html=True)
 
 # ── Page Content ──────────────────────────────────────────────────────────────
 st.markdown('<div class="cp-page">', unsafe_allow_html=True)
@@ -745,10 +812,15 @@ if page == "home":
         st.markdown("<div style='height:12px'/>", unsafe_allow_html=True)
         if st.button("Logout", use_container_width=True):
             for k,v in defaults.items(): st.session_state[k]=v
+            try:
+                if "cp_page" in st.query_params:
+                    del st.query_params["cp_page"]
+            except Exception:
+                pass
             st.rerun()
 
 # ════════════════════════════════════════════
-#  PAGE 2 — RISK (Risky Customers + Actions + Status)
+#  PAGE 2 — RISK (Risky Customers)
 # ════════════════════════════════════════════
 elif page == "risk":
     st.markdown('<div class="cp-section-header">Risky Customers</div>', unsafe_allow_html=True)
@@ -770,7 +842,7 @@ elif page == "risk":
 
             st.markdown("""
             <div class="cp-cust-row">
-              <div style="flex:1;">
+              <div style="flex:1;min-width:0;">
                 <div class="cp-cust-name">{}</div>
                 <div class="cp-cust-sub">{} invoices · {}</div>
                 <div style="margin-top:6px;">
@@ -804,7 +876,6 @@ elif page == "calls":
     if len(summary) == 0:
         st.info("No data yet. Add invoices from the ➕ tab.")
     else:
-        # Only show customers who need action (C and D first, then B)
         call_df = summary[summary["Risk Grade"].isin(["D","C","B"])].copy()
         call_df = call_df.sort_values("Risk Score", ascending=False).reset_index(drop=True)
 
@@ -817,7 +888,6 @@ elif page == "calls":
             </div>
             """, unsafe_allow_html=True)
         else:
-            priority_color = {"D":"#E53E3E","C":"#ED8936","B":"#F5A623"}
             priority_label = {"D":"🔴 URGENT","C":"🟠 FOLLOW UP","B":"🟡 CHECK IN"}
 
             for i, (_, row) in enumerate(call_df.iterrows()):
@@ -955,7 +1025,7 @@ elif page == "add":
     # Success message
     if st.session_state["form_success"]:
         st.success("✓ {} saved! Dashboard updated.".format(st.session_state["form_success"]))
-        if st.button("➕ Add Another"):
+        if st.button("➕ Add Another", use_container_width=True):
             st.session_state["form_success"] = None
             st.rerun()
     else:
